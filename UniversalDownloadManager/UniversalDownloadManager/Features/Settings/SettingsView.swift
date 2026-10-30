@@ -153,30 +153,91 @@ struct SettingsView: View {
     private var browserInstructionsView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                // Safari Web Extension Guide
                 GlassCard(cornerRadius: 16, padding: 16) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("Safari Web Extension", systemImage: "safari.fill")
-                            .font(.headline)
-                            .foregroundStyle(.blue)
-                        Text("Coming in Phase 6. The extension allows you to tap the Safari toolbar extension icon to send any downloadable link directly to this app's background queue.")
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Label("Safari Web Extension", systemImage: "safari.fill")
+                                .font(.headline)
+                                .foregroundStyle(.blue)
+                            Spacer()
+                            GlassBadge("Active", color: .green)
+                        }
+                        
+                        Text("Universal Download Manager includes a native Safari Web Extension with a toolbar popup for 1-tap background downloading.")
                             .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        
+                        Divider().background(Color.white.opacity(0.2))
+                        
+                        Text("HOW TO ENABLE IN SAFARI")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.secondary)
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            stepRow(number: "1", text: "Open iPhone Settings → Apps → Safari.")
+                            stepRow(number: "2", text: "Tap 'Extensions' and select 'Universal Download Manager'.")
+                            stepRow(number: "3", text: "Toggle the extension switch ON.")
+                            stepRow(number: "4", text: "In Safari, tap the puzzle piece (🧩) or 'aA' icon in the address bar to open the popup and download files in the background.")
+                        }
+                        
+                        Divider().background(Color.white.opacity(0.2))
+                        
+                        Text("PERMISSIONS & PRIVACY")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.secondary)
+                        
+                        Text("• Scoped activeTab permission only: The extension only reads links on the page when you tap the popup.\n• Zero tracking: Browsing history is never stored or transmitted.\n• Direct links only: Video streams (like YouTube) and cookie-protected pages require web browser sessions.")
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
                 
+                // Chrome & Share Sheet Guide
                 GlassCard(cornerRadius: 16, padding: 16) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("Chrome Share Sheet", systemImage: "square.and.arrow.up.fill")
-                            .font(.headline)
-                            .foregroundStyle(.green)
-                        Text("Coming in Phase 5. In Google Chrome or any iOS browser, tap the Share icon and select 'Universal Download Manager' to immediately hand off the URL.")
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Label("Chrome & Share Sheet", systemImage: "square.and.arrow.up.fill")
+                                .font(.headline)
+                                .foregroundStyle(.green)
+                            Spacer()
+                            GlassBadge("Active", color: .green)
+                        }
+                        
+                        Text("In Google Chrome, Firefox, or any iOS browser, tap the browser's Share icon and choose 'Universal Download'.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
+                        
+                        Divider().background(Color.white.opacity(0.2))
+                        
+                        Text("HOW TO USE IN CHROME")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.secondary)
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            stepRow(number: "1", text: "In Chrome, tap the Share icon (or long-press any link → Share Link).")
+                            stepRow(number: "2", text: "Select 'Universal Download' from the Share Sheet.")
+                            stepRow(number: "3", text: "Review the target URL and customize the filename if desired.")
+                            stepRow(number: "4", text: "Tap 'Add to Download Queue'. The file will download in the background!")
+                        }
                     }
                 }
             }
             .padding()
         }
         .navigationTitle("Browser Setup")
+    }
+    
+    private func stepRow(number: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(number)
+                .font(.caption.bold())
+                .frame(width: 20, height: 20)
+                .background(Circle().fill(Color.blue.opacity(0.2)))
+                .foregroundStyle(.blue)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.primary)
+        }
     }
 }

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Download</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="glass-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo-area">
+                <div class="app-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="title">Universal Download</h1>
+                    <p class="subtitle">Safari Background Engine</p>
+                </div>
+            </div>
+        </header>
+
+        <!-- Current Page Card -->
+        <section class="card glass-card">
+            <span class="card-label">CURRENT TAB</span>
+            <div class="page-title" id="pageTitle">Detecting page...</div>
+            <div class="page-url" id="pageUrl">...</div>
+        </section>
+
+        <!-- Download Selection Card -->
+        <section class="card glass-card">
+            <div class="card-header-row">
+                <span class="card-label">DOWNLOAD LINK</span>
+                <span class="badge" id="detectedCountBadge">0 links found</span>
+            </div>
+
+            <!-- Selectable links dropdown/list if links found on page -->
+            <div id="detectedLinksContainer" class="hidden">
+                <select id="linksSelect" class="glass-select">
+                    <option value="">-- Choose a link found on page --</option>
+                </select>
+            </div>
+
+            <!-- Custom URL Input -->
+            <div class="input-group">
+                <input type="url" id="targetUrlInput" class="glass-input" placeholder="https://example.com/file.zip" required>
+            </div>
+
+            <!-- Filename Input -->
+            <div class="input-group">
+                <label for="filenameInput" class="input-label">SAVE AS</label>
+                <input type="text" id="filenameInput" class="glass-input" placeholder="filename.ext">
+            </div>
+
+            <!-- Auth/Stream Disclaimer -->
+            <div class="notice">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                </svg>
+                <span>Direct links only. Login cookies, paywalls, and streaming chunk segments (e.g. YouTube) require web session authentication.</span>
+            </div>
+        </section>
+
+        <!-- Status Message Banner -->
+        <div id="statusBanner" class="status-banner hidden"></div>
+
+        <!-- Action Button -->
+        <div class="button-stack">
+            <button id="downloadBtn" class="primary-btn glass-btn">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="8 12 12 16 16 12"></polyline>
+                    <line x1="12" y1="8" x2="12" y2="16"></line>
+                </svg>
+                <span>Download in Background</span>
+            </button>
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
+

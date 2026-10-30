@@ -316,6 +316,43 @@ final class FileStorageService: @unchecked Sendable {
         return total
     }
     
+    // MARK: - Safe Stale File Cleanup (Phase 7)
+    
+    /// Cleans stale temporary transfer files, orphaned fragments, and expired resume data safely.
+    func cleanStaleTemporaryFiles(activeDownloadIDs: Set<UUID> = []) {
+        let fileManager = FileManager.default
+        let now = Date()
+        let maxAge: TimeInterval = 86400 // 24 hours
+        
+        // 1. Clean orphaned or expired resume data files
+        if let resumeFiles = try? fileManager.contentsOfDirectory(at: resumeDataDirectory, includingPropertiesForKeys: [.contentModificationDateKey]) {
+            for fileURL in resumeFiles {
+                let filename = fileURL.lastPathComponent
+                if let uuidStr = filename.components(separatedBy: ".").first, let uuid = UUID(uuidString: uuidStr) {
+                    let modDate = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? now
+                    let age = now.timeIntervalSince(modDate)
+                    if !activeDownloadIDs.contains(uuid) || age > (maxAge * 2) {
+                        try? fileManager.removeItem(at: fileURL)
+                    }
+                }
+            }
+        }
+        
+        // 2. Clean stale system temporary directory files
+        let tempDir = fileManager.temporaryDirectory
+        if let tempFiles = try? fileManager.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: [.contentModificationDateKey]) {
+            for fileURL in tempFiles {
+                let name = fileURL.lastPathComponent
+                if name.hasPrefix("CFNetworkDownload") || name.hasSuffix(".tmp") || name.hasSuffix(".download") {
+                    let modDate = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? now
+                    if now.timeIntervalSince(modDate) > maxAge {
+                        try? fileManager.removeItem(at: fileURL)
+                    }
+                }
+            }
+        }
+    }
+    
     func clearAllFiles() {
         let fileManager = FileManager.default
         if let files = try? fileManager.contentsOfDirectory(at: documentsDirectory, includingPropertiesForKeys: nil) {

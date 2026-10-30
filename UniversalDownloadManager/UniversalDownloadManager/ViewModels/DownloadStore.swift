@@ -29,6 +29,9 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
     /// Total bytes currently stored by completed downloads on disk.
     @Published var totalStorageUsed: Int64 = 0
     
+    /// User-facing transient notification banner (e.g., download added from Chrome)
+    @Published var notificationMessage: String?
+    
     /// Coordinator for queue and concurrency.
     private let coordinator = DownloadCoordinator.shared
     
@@ -48,6 +51,9 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         // Load persisted items or populate initial sample test files
         loadInitialState()
         recalculateStorage()
+        
+        // Import any requests handed off from Chrome Share Sheet or Safari
+        checkAndImportPendingRequests()
         
         // Reconcile any in-flight background tasks from previous session
         Task {
@@ -71,6 +77,15 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         let runningIDs = await BackgroundDownloadService.shared.reconcileRunningTasks(knownFilenames: filenameMap)
         
         for item in items {
+            // 1. Verify completed items still exist on disk (prevents false completion reporting)
+            if item.status == .completed {
+                if let local = item.localFilename, !storage.fileExists(filename: local) {
+                    item.status = .failed
+                    item.lastError = "Downloaded file was removed or is missing from disk."
+                }
+            }
+            
+            // 2. Reconcile downloading items
             if item.status == .downloading {
                 if runningIDs.contains(item.id) {
                     // Task is actively running in system daemon!
@@ -102,6 +117,10 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
                 item.estimatedTimeRemaining = nil
             }
         }
+        
+        // 3. Clean stale temporary files & expired resume fragments
+        let activeIDs = Set(items.filter { $0.status == .downloading || $0.status == .paused || $0.status == .interrupted }.map { $0.id })
+        storage.cleanStaleTemporaryFiles(activeDownloadIDs: activeIDs)
         
         persistState()
     }
@@ -145,6 +164,55 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         items.filter { $0.status == .downloading }
              .compactMap { $0.currentSpeed }
              .reduce(0, +)
+    }
+    
+    // MARK: - External / Share Handoff (Phase 5)
+    
+    /// Imports any requests pending in the shared storage (handed off from Chrome Share Sheet or Safari).
+    func checkAndImportPendingRequests() {
+        let pending = PendingRequestsStore.shared.fetchAndClearPendingRequests()
+        for request in pending {
+            if let validURL = coordinator.validateURL(request.urlString) {
+                let item = addDownload(url: validURL, customFilename: request.customFilename)
+                notificationMessage = "Added download from \(request.sourceApp ?? "Chrome"): \(item.displayFilename)"
+            }
+        }
+    }
+    
+    /// Handles custom URL scheme requests: universaldownload://add?url=<target>&name=<optional>
+    @discardableResult
+    func handleIncomingURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), scheme == "universaldownload" else {
+            return false
+        }
+        
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: true) else {
+            notificationMessage = "Malformed universaldownload link received."
+            return false
+        }
+        
+        let host = components.host?.lowercased()
+        let path = components.path.lowercased()
+        
+        // Accept host "add" or "share", or path "/add" or "/share"
+        guard host == "add" || host == "share" || path == "/add" || path == "/share" || host == nil else {
+            return false
+        }
+        
+        // Extract "url" query param
+        guard let urlItem = components.queryItems?.first(where: { $0.name.lowercased() == "url" }),
+              let rawTargetURLString = urlItem.value,
+              let targetURL = coordinator.validateURL(rawTargetURLString) else {
+            notificationMessage = "Unable to add download: Invalid or unsupported HTTP/HTTPS URL."
+            return false
+        }
+        
+        let nameItem = components.queryItems?.first(where: { $0.name.lowercased() == "name" || $0.name.lowercased() == "filename" })
+        let customName = nameItem?.value
+        
+        let item = addDownload(url: targetURL, customFilename: customName)
+        notificationMessage = "Added download from Chrome: \(item.displayFilename)"
+        return true
     }
     
     // MARK: - Download Actions (Real URLSession)

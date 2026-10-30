@@ -166,14 +166,20 @@ final class BackgroundDownloadService: NSObject, @unchecked Sendable {
                 
                 // Reconnect via persisted taskDescription
                 if let desc = downloadTask.taskDescription, let id = UUID(uuidString: desc) {
-                    activeTasks[id] = downloadTask
-                    taskIdentifierToID[downloadTask.taskIdentifier] = id
-                    runningIDs.insert(id)
-                    
                     if let filename = knownFilenames[id] {
+                        activeTasks[id] = downloadTask
+                        taskIdentifierToID[downloadTask.taskIdentifier] = id
+                        runningIDs.insert(id)
+                        
                         taskFilenames[id] = filename
                         speedTrackers[id] = (lastBytes: 0, lastTime: Date(), smoothedSpeed: 0)
+                    } else {
+                        // Stale task without corresponding download record in store: cancel safely
+                        downloadTask.cancel()
                     }
+                } else {
+                    // Task without valid taskDescription: cancel safely
+                    downloadTask.cancel()
                 }
             }
             return runningIDs

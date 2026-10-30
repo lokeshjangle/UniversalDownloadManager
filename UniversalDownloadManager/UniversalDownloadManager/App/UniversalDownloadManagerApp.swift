@@ -11,13 +11,22 @@ struct UniversalDownloadManagerApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(store: store)
+                .onOpenURL { incomingURL in
+                    _ = store.handleIncomingURL(incomingURL)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: AppDelegate.deepLinkNotification)) { notification in
+                    if let incomingURL = notification.object as? URL {
+                        _ = store.handleIncomingURL(incomingURL)
+                    }
+                }
                 .onChange(of: scenePhase) { _, newPhase in
                     switch newPhase {
                     case .background:
                         // App was minimized or suspended — flush all download metadata to disk
                         store.flushToDisk()
                     case .active:
-                        // App returned to foreground — reconcile running background transfers
+                        // App returned to foreground — import any pending shared downloads and reconcile running background transfers
+                        store.checkAndImportPendingRequests()
                         Task {
                             await store.reconcileTasks()
                             store.processQueue()

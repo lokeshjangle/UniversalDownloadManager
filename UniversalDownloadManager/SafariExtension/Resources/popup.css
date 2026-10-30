@@ -1,0 +1,253 @@
+:root {
+    color-scheme: light dark;
+    --bg-glass: rgba(255, 255, 255, 0.72);
+    --border-glass: rgba(255, 255, 255, 0.35);
+    --card-bg: rgba(255, 255, 255, 0.45);
+    --text-primary: #1c1c1e;
+    --text-secondary: #8e8e93;
+    --accent: #007aff;
+    --accent-hover: #0062cc;
+    --success-bg: rgba(52, 199, 89, 0.15);
+    --success-text: #28cd41;
+    --error-bg: rgba(255, 59, 48, 0.15);
+    --error-text: #ff3b30;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg-glass: rgba(28, 28, 30, 0.78);
+        --border-glass: rgba(255, 255, 255, 0.15);
+        --card-bg: rgba(44, 44, 46, 0.55);
+        --text-primary: #ffffff;
+        --text-secondary: #98989d;
+        --accent: #0a84ff;
+        --accent-hover: #409cff;
+        --success-bg: rgba(48, 209, 88, 0.2);
+        --success-text: #30d158;
+        --error-bg: rgba(255, 69, 58, 0.2);
+        --error-text: #ff453a;
+    }
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+}
+
+body {
+    width: 320px;
+    background-color: transparent;
+    padding: 12px;
+}
+
+.glass-container {
+    background: var(--bg-glass);
+    backdrop-filter: blur(25px);
+    -webkit-backdrop-filter: blur(25px);
+    border: 1px solid var(--border-glass);
+    border-radius: 20px;
+    padding: 16px;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.12);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.logo-area {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.app-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #007aff, #5856d6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+}
+
+.title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1.2;
+}
+
+.subtitle {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-glass);
+    border-radius: 14px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.card-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.card-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+}
+
+.badge {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    background: rgba(0, 122, 255, 0.15);
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.page-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.page-url {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.glass-select, .glass-input {
+    width: 100%;
+    padding: 9px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border-glass);
+    background: rgba(255, 255, 255, 0.2);
+    color: var(--text-primary);
+    font-size: 12px;
+    outline: none;
+    transition: all 0.2s ease;
+}
+
+@media (prefers-color-scheme: dark) {
+    .glass-select, .glass-input {
+        background: rgba(0, 0, 0, 0.25);
+    }
+}
+
+.glass-select:focus, .glass-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.25);
+}
+
+.input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.input-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+}
+
+.notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--text-secondary);
+    line-height: 1.3;
+    padding-top: 4px;
+}
+
+.notice svg {
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.button-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.primary-btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px;
+    border-radius: 12px;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 122, 255, 0.35);
+    transition: transform 0.1s ease, background-color 0.2s ease;
+}
+
+.primary-btn:active {
+    transform: scale(0.98);
+}
+
+.primary-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.status-banner {
+    padding: 10px 12px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.3;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.status-banner.success {
+    background: var(--success-bg);
+    color: var(--success-text);
+    border: 1px solid var(--success-text);
+}
+
+.status-banner.error {
+    background: var(--error-bg);
+    color: var(--error-text);
+    border: 1px solid var(--error-text);
+}
+
+.hidden {
+    display: none !important;
+}
+
