@@ -10,6 +10,8 @@ struct AddDownloadView: View {
     @State private var suggestedFilename: String = ""
     @State private var validationError: String?
     @State private var isValid: Bool = false
+    @State private var detectedPlatform: SupportedPlatform = .direct
+    @State private var isResolvingMedia: Bool = false
     
     private let coordinator = DownloadCoordinator.shared
     
@@ -98,11 +100,30 @@ struct AddDownloadView: View {
                                 .font(.caption)
                                 .foregroundStyle(AppTheme.errorColor)
                         }
+                        
+                        if detectedPlatform != .direct {
+                            HStack(spacing: 10) {
+                                Image(systemName: detectedPlatform.iconName)
+                                    .font(.title3)
+                                    .foregroundStyle(detectedPlatform == .instagram ? .purple : .red)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("\(detectedPlatform.rawValue) Detected")
+                                        .font(.subheadline.bold())
+                                    Text(detectedPlatform == .instagram ? "Client-side video stream extraction" : "Stream extraction via resolver API")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                GlassBadge("Stream", color: detectedPlatform == .instagram ? .purple : .red)
+                            }
+                            .padding(10)
+                            .glassEffect(.regular, in: .rect(cornerRadius: 12))
+                        }
                     }
                 } header: {
                     Text("Download Source URL")
                 } footer: {
-                    Text("Enter a direct HTTP or HTTPS file URL.")
+                    Text(detectedPlatform == .direct ? "Enter a direct HTTP or HTTPS file URL." : "Social media video link detected. Tap 'Resolve & Download' to extract the direct MP4.")
                 }
                 
                 // Section 2: Filename Customization (revealed when valid)
@@ -157,16 +178,23 @@ struct AddDownloadView: View {
                             startDownload()
                         } label: {
                             HStack(spacing: 8) {
-                                Image(systemName: "arrow.down.circle.fill")
-                                    .font(.headline)
-                                Text("Start Download")
-                                    .font(.headline)
+                                if isResolvingMedia {
+                                    ProgressView()
+                                        .tint(.white)
+                                    Text("Resolving Media Stream...")
+                                        .font(.headline)
+                                } else {
+                                    Image(systemName: detectedPlatform == .direct ? "arrow.down.circle.fill" : "wand.and.stars")
+                                        .font(.headline)
+                                    Text(detectedPlatform == .direct ? "Start Download" : "Resolve & Download")
+                                        .font(.headline)
+                                }
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                         }
                         .buttonStyle(.glassProminent)
-                        .disabled(!isValid)
+                        .disabled(!isValid || isResolvingMedia)
                         .accessibilityLabel("Start Download")
                         
                         // Bottom: Secondary Back Button
@@ -231,16 +259,19 @@ struct AddDownloadView: View {
             isValid = false
             validationError = nil
             suggestedFilename = ""
+            detectedPlatform = .direct
             return
         }
         
         if let url = coordinator.validateURL(trimmed) {
             isValid = true
             validationError = nil
+            detectedPlatform = MediaResolverService.shared.detectPlatform(from: url)
             let suggested = coordinator.suggestedFilename(for: url)
             suggestedFilename = suggested
         } else {
             isValid = false
+            detectedPlatform = .direct
             validationError = "Please enter a valid HTTP or HTTPS URL."
         }
     }
@@ -251,8 +282,27 @@ struct AddDownloadView: View {
         }
         
         let userSpecified = customFilename.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filename = userSpecified.isEmpty ? nil : userSpecified
-        store.addDownload(url: url, customFilename: filename)
-        dismiss()
+        
+        if detectedPlatform == .direct {
+            let filename = userSpecified.isEmpty ? nil : userSpecified
+            store.addDownload(url: url, customFilename: filename)
+            dismiss()
+        } else {
+            isResolvingMedia = true
+            validationError = nil
+            
+            Task { @MainActor in
+                do {
+                    let resolved = try await MediaResolverService.shared.resolve(url: url)
+                    let finalName = userSpecified.isEmpty ? resolved.filename : userSpecified
+                    store.addDownload(url: resolved.directURL, customFilename: finalName)
+                    isResolvingMedia = false
+                    dismiss()
+                } catch {
+                    isResolvingMedia = false
+                    validationError = error.localizedDescription
+                }
+            }
+        }
     }
 }

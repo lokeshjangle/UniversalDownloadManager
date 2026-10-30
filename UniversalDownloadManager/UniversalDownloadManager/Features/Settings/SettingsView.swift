@@ -6,6 +6,7 @@ struct SettingsView: View {
     @ObservedObject var store: DownloadStore
     @State private var showingResetAlert: Bool = false
     @State private var showingClearedTempAlert: Bool = false
+    @State private var resolverEndpoint: String = MediaResolverService.shared.resolverEndpoint
     
     private let storage = FileStorageService.shared
     
@@ -66,7 +67,52 @@ struct SettingsView: View {
                     Text("Tap 'Download Location' to visually browse folders or select a destination in the Apple Files app.")
                 }
                 
-                // Section 3: Browser Integrations Info
+                // Section 3: Media Stream Resolver (Instagram & YouTube)
+                Section {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Label("Instagram Reels", systemImage: "camera.circle.fill")
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(.purple)
+                            Spacer()
+                            Text("Native On-Device")
+                                .font(.caption.bold())
+                                .foregroundStyle(AppTheme.successColor)
+                        }
+                        Text("Public reels extract directly from page metadata without third-party APIs.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 2)
+                    
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Label("Stream Resolver API", systemImage: "play.rectangle.fill")
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(.red)
+                            Spacer()
+                        }
+                        TextField("https://api.cobalt.tools", text: $resolverEndpoint)
+                            .font(.subheadline)
+                            .keyboardType(.URL)
+                            .textContentType(.URL)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .onChange(of: resolverEndpoint) { _, newValue in
+                                MediaResolverService.shared.resolverEndpoint = newValue
+                            }
+                        Text("Used to resolve YouTube, TikTok, and web streams into direct MP4 downloads. Compatible with open-source Cobalt API instances.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 2)
+                } header: {
+                    Text("Media Stream Resolvers")
+                } footer: {
+                    Text("You can host your own private Cobalt resolver instance and point the endpoint above.")
+                }
+                
+                // Section 4: Browser Integrations Info
                 Section("Browser Integrations") {
                     NavigationLink {
                         browserInstructionsView

@@ -52,6 +52,29 @@ document.addEventListener("DOMContentLoaded", async () => {
                         func: () => {
                             const found = [];
                             const filePattern = /\.(pdf|zip|mp4|mov|dmg|pkg|iso|tar|gz|tgz|bz2|csv|xlsx|docx|mp3|m4a|epub|apk)(\?.*)?$/i;
+
+                            // 1. Scan on-page video elements (e.g. Instagram Reels, Web players)
+                            document.querySelectorAll("video").forEach((v, idx) => {
+                                const src = v.currentSrc || v.src;
+                                if (src && (src.startsWith("http://") || src.startsWith("https://"))) {
+                                    found.push({
+                                        url: src,
+                                        text: `🎬 Video Stream ${idx + 1} (.mp4)`
+                                    });
+                                }
+                            });
+
+                            // 2. Scan OpenGraph video meta tags
+                            const ogVideo = document.querySelector('meta[property="og:video"]')?.content ||
+                                            document.querySelector('meta[property="og:video:secure_url"]')?.content;
+                            if (ogVideo && (ogVideo.startsWith("http://") || ogVideo.startsWith("https://"))) {
+                                found.push({
+                                    url: ogVideo,
+                                    text: `🎬 ${document.title || 'Page Video'} (.mp4)`
+                                });
+                            }
+
+                            // 3. Scan standard file links
                             document.querySelectorAll("a[href]").forEach(a => {
                                 const href = a.href;
                                 if (href && (href.startsWith("http://") || href.startsWith("https://"))) {
