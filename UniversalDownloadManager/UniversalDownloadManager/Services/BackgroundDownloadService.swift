@@ -8,6 +8,14 @@ protocol DownloadServiceDelegate: AnyObject {
     func downloadDidComplete(id: UUID, localFilename: String, fileSize: Int64)
     func downloadDidFail(id: UUID, error: String, canResume: Bool)
     func downloadDidPause(id: UUID, hasResumeData: Bool)
+    func downloadDidReconcile(runningIDs: Set<UUID>)
+}
+
+/// The state of a task during relaunch reconciliation.
+enum TaskReconciliationResult {
+    case stillRunning(bytesWritten: Int64, totalBytes: Int64)
+    case completed
+    case orphanedOrTerminated
 }
 
 /// The core Foundation URLSession download engine supporting background transfers,
@@ -75,6 +83,7 @@ final class BackgroundDownloadService: NSObject, @unchecked Sendable {
         // Check if resume data exists for this item
         if let resumeData = FileStorageService.shared.readResumeData(for: id) {
             let task = session.downloadTask(withResumeData: resumeData)
+            task.taskDescription = id.uuidString // Persisted by nsurlsessiond across restarts
             register(task: task, for: id, filename: filename)
             task.resume()
             return
@@ -85,6 +94,7 @@ final class BackgroundDownloadService: NSObject, @unchecked Sendable {
         request.setValue("UniversalDownloadManager/1.0", forHTTPHeaderField: "User-Agent")
         
         let task = session.downloadTask(with: request)
+        task.taskDescription = id.uuidString // Persisted by nsurlsessiond across restarts
         register(task: task, for: id, filename: filename)
         task.resume()
     }
@@ -142,16 +152,31 @@ final class BackgroundDownloadService: NSObject, @unchecked Sendable {
         task?.cancel()
     }
     
-    /// Reconnects with running background tasks on app relaunch.
-    func reconcileTasks(completion: @escaping ([Int: URLSessionDownloadTask]) -> Void) {
-        session.getAllTasks { tasks in
-            var mapped: [Int: URLSessionDownloadTask] = [:]
+    // MARK: - Relaunch Task Reconciliation (Phase 4)
+    
+    /// Reconnects with running background tasks on app relaunch, restoring state for any in-flight transfers.
+    func reconcileRunningTasks(knownFilenames: [UUID: String]) async -> Set<UUID> {
+        let tasks = await session.allTasks
+        
+        return lock.withLock {
+            var runningIDs = Set<UUID>()
+            
             for task in tasks {
-                if let downloadTask = task as? URLSessionDownloadTask {
-                    mapped[downloadTask.taskIdentifier] = downloadTask
+                guard let downloadTask = task as? URLSessionDownloadTask else { continue }
+                
+                // Reconnect via persisted taskDescription
+                if let desc = downloadTask.taskDescription, let id = UUID(uuidString: desc) {
+                    activeTasks[id] = downloadTask
+                    taskIdentifierToID[downloadTask.taskIdentifier] = id
+                    runningIDs.insert(id)
+                    
+                    if let filename = knownFilenames[id] {
+                        taskFilenames[id] = filename
+                        speedTrackers[id] = (lastBytes: 0, lastTime: Date(), smoothedSpeed: 0)
+                    }
                 }
             }
-            completion(mapped)
+            return runningIDs
         }
     }
 }
@@ -169,7 +194,15 @@ extension BackgroundDownloadService: URLSessionDownloadDelegate {
         totalBytesExpectedToWrite: Int64
     ) {
         lock.lock()
-        guard let id = taskIdentifierToID[downloadTask.taskIdentifier] else {
+        // Try resolving by taskIdentifier or taskDescription
+        var resolvedID = taskIdentifierToID[downloadTask.taskIdentifier]
+        if resolvedID == nil, let desc = downloadTask.taskDescription, let id = UUID(uuidString: desc) {
+            taskIdentifierToID[downloadTask.taskIdentifier] = id
+            activeTasks[id] = downloadTask
+            resolvedID = id
+        }
+        
+        guard let id = resolvedID else {
             lock.unlock()
             return
         }
@@ -184,7 +217,6 @@ extension BackgroundDownloadService: URLSessionDownloadDelegate {
             if elapsed >= 0.5 {
                 let deltaBytes = totalBytesWritten - tracker.lastBytes
                 let currentSpeed = Double(deltaBytes) / elapsed
-                // Smooth speed using 70/30 weight
                 let smoothed = tracker.smoothedSpeed > 0 ? (tracker.smoothedSpeed * 0.7 + currentSpeed * 0.3) : currentSpeed
                 speedTrackers[id] = (lastBytes: totalBytesWritten, lastTime: now, smoothedSpeed: smoothed)
                 speed = smoothed
@@ -226,7 +258,14 @@ extension BackgroundDownloadService: URLSessionDownloadDelegate {
         expectedTotalBytes: Int64
     ) {
         lock.lock()
-        guard let id = taskIdentifierToID[downloadTask.taskIdentifier] else {
+        var resolvedID = taskIdentifierToID[downloadTask.taskIdentifier]
+        if resolvedID == nil, let desc = downloadTask.taskDescription, let id = UUID(uuidString: desc) {
+            taskIdentifierToID[downloadTask.taskIdentifier] = id
+            activeTasks[id] = downloadTask
+            resolvedID = id
+        }
+        
+        guard let id = resolvedID else {
             lock.unlock()
             return
         }
@@ -252,11 +291,17 @@ extension BackgroundDownloadService: URLSessionDownloadDelegate {
         didFinishDownloadingTo location: URL
     ) {
         lock.lock()
-        guard let id = taskIdentifierToID[downloadTask.taskIdentifier],
-              let suggestedName = taskFilenames[id] else {
+        var resolvedID = taskIdentifierToID[downloadTask.taskIdentifier]
+        if resolvedID == nil, let desc = downloadTask.taskDescription, let id = UUID(uuidString: desc) {
+            resolvedID = id
+        }
+        
+        guard let id = resolvedID else {
             lock.unlock()
             return
         }
+        
+        let suggestedName = taskFilenames[id] ?? "download_\(id.uuidString.prefix(6))"
         
         activeTasks.removeValue(forKey: id)
         taskIdentifierToID.removeValue(forKey: downloadTask.taskIdentifier)
@@ -264,10 +309,8 @@ extension BackgroundDownloadService: URLSessionDownloadDelegate {
         speedTrackers.removeValue(forKey: id)
         lock.unlock()
         
-        // Remove any stale resume data
         FileStorageService.shared.removeResumeData(for: id)
         
-        // Check for server suggested filename in Content-Disposition if available
         var finalFilename = suggestedName
         if let response = downloadTask.response as? HTTPURLResponse,
            let contentDisposition = response.value(forHTTPHeaderField: "Content-Disposition") {
@@ -289,7 +332,6 @@ extension BackgroundDownloadService: URLSessionDownloadDelegate {
     }
     
     private func parseFilenameFromContentDisposition(_ header: String) -> String? {
-        // e.g. 'attachment; filename="data.csv"' or "filename=data.csv"
         let parts = header.components(separatedBy: ";")
         for part in parts {
             let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -313,7 +355,12 @@ extension BackgroundDownloadService: URLSessionTaskDelegate {
         let nsError = error as NSError
         
         lock.lock()
-        guard let id = taskIdentifierToID[task.taskIdentifier] else {
+        var resolvedID = taskIdentifierToID[task.taskIdentifier]
+        if resolvedID == nil, let desc = task.taskDescription, let id = UUID(uuidString: desc) {
+            resolvedID = id
+        }
+        
+        guard let id = resolvedID else {
             lock.unlock()
             return
         }
@@ -324,9 +371,8 @@ extension BackgroundDownloadService: URLSessionTaskDelegate {
         speedTrackers.removeValue(forKey: id)
         lock.unlock()
         
-        // If cancellation error (e.g. paused by user), handle gracefully
+        // Cancellation handling (e.g. paused by user)
         if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
-            // Check if resume data was attached in userInfo
             if let resumeData = nsError.userInfo[NSURLSessionDownloadTaskResumeData] as? Data, !resumeData.isEmpty {
                 FileStorageService.shared.saveResumeData(resumeData, for: id)
                 Task { @MainActor in
@@ -336,7 +382,7 @@ extension BackgroundDownloadService: URLSessionTaskDelegate {
             return
         }
         
-        // Extract resume data if network failure occurred during download
+        // Network drop with resume data
         var canResume = false
         if let resumeData = nsError.userInfo[NSURLSessionDownloadTaskResumeData] as? Data, !resumeData.isEmpty {
             FileStorageService.shared.saveResumeData(resumeData, for: id)
@@ -377,4 +423,3 @@ extension BackgroundDownloadService: URLSessionDelegate {
         }
     }
 }
-

@@ -1,10 +1,13 @@
 import SwiftUI
 
-/// Settings view allowing customization of transfer concurrency, storage limits, and integration status.
+/// Settings view allowing customization of transfer concurrency, save location directory,
+/// storage limits, and integration status.
 struct SettingsView: View {
     @ObservedObject var store: DownloadStore
     @State private var showingResetAlert: Bool = false
     @State private var showingClearedTempAlert: Bool = false
+    
+    private let storage = FileStorageService.shared
     
     var body: some View {
         NavigationStack {
@@ -30,29 +33,37 @@ struct SettingsView: View {
                     }
                 }
                 
-                // Section 2: Storage & Files
-                Section("Storage & Documents") {
+                // Section 2: Storage & Browsable Save Location
+                Section {
+                    // Navigation link to the Visual Folder Browser
+                    NavigationLink {
+                        FolderBrowserView(store: store)
+                    } label: {
+                        HStack {
+                            Label("Download Location", systemImage: "folder.fill")
+                            Spacer()
+                            Text(storage.currentFolderDisplayName)
+                                .font(.subheadline.bold())
+                                .foregroundStyle(AppTheme.accentColor)
+                        }
+                    }
+                    
                     HStack {
-                        Label("Completed Files Storage", systemImage: "internaldrive")
+                        Label("Storage Used", systemImage: "internaldrive")
                         Spacer()
                         Text(Formatters.formatBytes(store.totalStorageUsed))
                             .font(.subheadline.bold())
                             .foregroundStyle(.secondary)
                     }
                     
-                    HStack {
-                        Label("Local Directory", systemImage: "folder")
-                        Spacer()
-                        Text("App Documents/Downloads")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    
-                    Button("Clear Downloaded Files & Cache") {
+                    Button("Clear Downloaded Files & Cache", role: .destructive) {
                         store.clearTemporaryFiles()
                         showingClearedTempAlert = true
                     }
-                    .foregroundStyle(AppTheme.errorColor)
+                } header: {
+                    Text("Storage & Save Location")
+                } footer: {
+                    Text("Tap 'Download Location' to visually browse folders or select a destination in the Apple Files app.")
                 }
                 
                 // Section 3: Browser Integrations Info
@@ -80,8 +91,20 @@ struct SettingsView: View {
                     }
                 }
                 
-                // Section 5: About
-                Section("About") {
+                // Section 5: Background Reliability & About
+                Section("System & Reliability") {
+                    NavigationLink {
+                        BackgroundGuideView()
+                    } label: {
+                        HStack {
+                            Label("Background Reliability Guide", systemImage: "bolt.shield.fill")
+                            Spacer()
+                            Text("iOS Rules")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    
                     HStack {
                         Text("Engine")
                         Spacer()
@@ -91,19 +114,19 @@ struct SettingsView: View {
                     HStack {
                         Text("Background Transfer")
                         Spacer()
-                        Text("Enabled (System-managed)")
+                        Text("Active (nsurlsessiond)")
+                            .foregroundStyle(AppTheme.successColor)
+                    }
+                    HStack {
+                        Text("Files App Access")
+                        Spacer()
+                        Text("Enabled (In-Place)")
                             .foregroundStyle(AppTheme.successColor)
                     }
                     HStack {
                         Text("Version")
                         Spacer()
-                        Text("1.0.0 (Phase 3 Engine)")
-                            .foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Text("License")
-                        Spacer()
-                        Text("Personal iPhone Edition")
+                        Text("1.0.0 (Phase 4 Background)")
                             .foregroundStyle(.secondary)
                     }
                 }

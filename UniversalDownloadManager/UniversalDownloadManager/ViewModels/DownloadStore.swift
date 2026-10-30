@@ -2,7 +2,8 @@ import Foundation
 import SwiftUI
 import Combine
 
-/// Authoritative view model managing all download items, persistence, and real Foundation network transfers.
+/// Authoritative view model managing all download items, persistence, customizable save directories,
+/// background URLSession lifecycle handling, and task reconciliation on relaunch.
 @MainActor
 final class DownloadStore: ObservableObject, DownloadServiceDelegate {
     /// All download items in the store.
@@ -15,6 +16,9 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
             processQueue()
         }
     }
+    
+    /// Currently chosen download folder (relative to app Documents).
+    @Published var currentDownloadFolder: String = "Downloads"
     
     /// Wi-Fi only download setting.
     @Published var wifiOnly: Bool = false
@@ -38,12 +42,73 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         // Connect as delegate to background service
         BackgroundDownloadService.shared.delegate = self
         
+        // Load active download folder
+        self.currentDownloadFolder = storage.currentSubdirectory
+        
         // Load persisted items or populate initial sample test files
         loadInitialState()
         recalculateStorage()
         
-        // Automatically start queued items up to concurrency limit
-        processQueue()
+        // Reconcile any in-flight background tasks from previous session
+        Task {
+            await self.reconcileTasks()
+            self.processQueue()
+        }
+    }
+    
+    // MARK: - Save Location Customization
+    
+    func setDownloadLocation(_ newSubdirectory: String) {
+        storage.selectInAppFolder(named: newSubdirectory)
+        self.currentDownloadFolder = storage.currentFolderDisplayName
+    }
+    
+    // MARK: - Relaunch & Background Reconciliation (Phase 4)
+    
+    /// Reconciles saved download items with actual URLSession background tasks running in the system daemon.
+    func reconcileTasks() async {
+        let filenameMap = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.displayFilename) })
+        let runningIDs = await BackgroundDownloadService.shared.reconcileRunningTasks(knownFilenames: filenameMap)
+        
+        for item in items {
+            if item.status == .downloading {
+                if runningIDs.contains(item.id) {
+                    // Task is actively running in system daemon!
+                    continue
+                }
+                
+                // If the file is already finished on disk, mark as completed
+                if let local = item.localFilename, storage.fileExists(filename: local) {
+                    item.status = .completed
+                    item.currentSpeed = nil
+                    item.estimatedTimeRemaining = nil
+                    continue
+                }
+                
+                // If resume data was saved before termination, mark as paused/interrupted
+                if storage.readResumeData(for: item.id) != nil {
+                    item.status = .interrupted
+                    item.hasResumeData = true
+                    item.lastError = "Network or app interrupted. Tap Retry to resume."
+                    item.currentSpeed = nil
+                    item.estimatedTimeRemaining = nil
+                    continue
+                }
+                
+                // Otherwise mark interrupted so user can retry safely
+                item.status = .interrupted
+                item.lastError = "Transfer interrupted. Tap Retry to restart."
+                item.currentSpeed = nil
+                item.estimatedTimeRemaining = nil
+            }
+        }
+        
+        persistState()
+    }
+    
+    /// Flushes all metadata to persistent storage immediately (called on scenePhase transition to background).
+    func flushToDisk() {
+        persistState()
     }
     
     // MARK: - Initial State & Persistence
@@ -53,7 +118,6 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         if !savedItems.isEmpty {
             self.items = savedItems
         } else {
-            // First run: provide trusted sample links ready to test
             loadSampleData()
         }
     }
@@ -85,7 +149,6 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
     
     // MARK: - Download Actions (Real URLSession)
     
-    /// Adds and starts a real download.
     @discardableResult
     func addDownload(url: URL, customFilename: String? = nil) -> DownloadItem {
         let filename: String
@@ -107,13 +170,11 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         items.insert(newItem, at: 0)
         persistState()
         
-        // Dispatch to coordinator for concurrency scheduling
         coordinator.startOrQueue(item: newItem, allItems: items)
         persistState()
         return newItem
     }
     
-    /// Pauses an active download.
     func pauseDownload(id: UUID) {
         guard let item = items.first(where: { $0.id == id }) else { return }
         guard item.status == .downloading || item.status == .queued else { return }
@@ -126,7 +187,6 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         processQueue()
     }
     
-    /// Resumes a paused download.
     func resumeDownload(id: UUID) {
         guard let item = items.first(where: { $0.id == id }) else { return }
         guard item.status == .paused || item.status == .queued || item.status == .interrupted else { return }
@@ -135,7 +195,6 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         persistState()
     }
     
-    /// Retries a failed or interrupted download.
     func retryDownload(id: UUID) {
         guard let item = items.first(where: { $0.id == id }) else { return }
         
@@ -143,7 +202,6 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         persistState()
     }
     
-    /// Cancels a download.
     func cancelDownload(id: UUID) {
         guard let item = items.first(where: { $0.id == id }) else { return }
         
@@ -156,7 +214,6 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         processQueue()
     }
     
-    /// Deletes a download record and its associated file on disk.
     func deleteDownload(id: UUID) {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
         let item = items[index]
@@ -175,7 +232,6 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         processQueue()
     }
     
-    /// Pauses all active downloads.
     func pauseAllActive() {
         for item in items where item.status == .downloading {
             coordinator.pauseDownload(id: item.id)
@@ -186,7 +242,6 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         persistState()
     }
     
-    /// Resumes all paused downloads.
     func resumeAllPaused() {
         for item in items where item.status == .paused {
             coordinator.resumeDownload(item: item, allItems: items)
@@ -194,7 +249,6 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         persistState()
     }
     
-    /// Clears all completed download records and files.
     func clearAllCompleted() {
         for item in items where item.status == .completed {
             if let local = item.localFilename {
@@ -205,13 +259,11 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         persistState()
     }
     
-    /// Clears all failed download records.
     func clearAllFailed() {
         items.removeAll { $0.status == .failed || $0.status == .cancelled }
         persistState()
     }
     
-    /// Processes queue to start any waiting downloads up to concurrency limit.
     func processQueue() {
         coordinator.processQueue(items: items)
     }
@@ -275,6 +327,10 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         processQueue()
     }
     
+    func downloadDidReconcile(runningIDs: Set<UUID>) {
+        objectWillChange.send()
+    }
+    
     // MARK: - Storage Management
     
     private func recalculateStorage() {
@@ -297,7 +353,6 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
     private func loadSampleData() {
         let now = Date()
         
-        // Real small and medium downloadable test files from trusted hosts
         items = [
             DownloadItem(
                 id: UUID(),

@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Main container view providing tabbed navigation across all key feature areas.
 struct ContentView: View {
-    @StateObject private var store = DownloadStore()
+    @ObservedObject var store: DownloadStore
     @State private var selectedTab: Tab = .dashboard
     
     enum Tab: String, CaseIterable {
