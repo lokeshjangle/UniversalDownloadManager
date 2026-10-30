@@ -36,7 +36,8 @@ final class MediaResolverService: Sendable {
     static let shared = MediaResolverService()
     
     private let defaultResolverEndpoint = "https://api.cobalt.tools"
-    private let userDefaultsKey = "UDM_CustomResolverEndpoint"
+    private let endpointUserDefaultsKey = "UDM_CustomResolverEndpoint"
+    private let apiKeyUserDefaultsKey = "UDM_CustomResolverAPIKey"
     
     private init() {}
     
@@ -45,12 +46,22 @@ final class MediaResolverService: Sendable {
     /// The current resolver API endpoint (defaults to Cobalt public instance, configurable in Settings).
     var resolverEndpoint: String {
         get {
-            let saved = UserDefaults.standard.string(forKey: userDefaultsKey)
+            let saved = UserDefaults.standard.string(forKey: endpointUserDefaultsKey)
             let trimmed = saved?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return trimmed.isEmpty ? defaultResolverEndpoint : trimmed
         }
         set {
-            UserDefaults.standard.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: userDefaultsKey)
+            UserDefaults.standard.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: endpointUserDefaultsKey)
+        }
+    }
+    
+    /// Optional API Key or Bearer token for protected resolver instances.
+    var resolverAPIKey: String {
+        get {
+            UserDefaults.standard.string(forKey: apiKeyUserDefaultsKey) ?? ""
+        }
+        set {
+            UserDefaults.standard.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: apiKeyUserDefaultsKey)
         }
     }
     
@@ -205,6 +216,16 @@ final class MediaResolverService: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("UniversalDownloadManager/1.0", forHTTPHeaderField: "User-Agent")
+        
+        let apiKey = resolverAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !apiKey.isEmpty {
+            if apiKey.lowercased().hasPrefix("bearer ") || apiKey.lowercased().hasPrefix("api-key ") {
+                request.setValue(apiKey, forHTTPHeaderField: "Authorization")
+            } else {
+                request.setValue("Api-Key \(apiKey)", forHTTPHeaderField: "Authorization")
+            }
+        }
+        
         request.timeoutInterval = 20.0
         
         let payload: [String: Any] = [
@@ -253,6 +274,11 @@ final class MediaResolverService: Sendable {
         }
         
         if let errCode = result.error?.code {
+            if errCode.contains("auth") || errCode.contains("jwt") || errCode.contains("key") {
+                throw NSError(domain: "MediaResolverError", code: 401, userInfo: [
+                    NSLocalizedDescriptionKey: "Authentication required by '\(apiBase.host ?? "API")'. The official api.cobalt.tools requires an API key or a self-hosted instance. Add your API key or point to your instance in Settings."
+                ])
+            }
             throw NSError(domain: "MediaResolverError", code: 422, userInfo: [
                 NSLocalizedDescriptionKey: "Resolver API error: \(errCode)"
             ])

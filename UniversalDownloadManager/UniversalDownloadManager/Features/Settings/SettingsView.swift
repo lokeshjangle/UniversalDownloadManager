@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var showingResetAlert: Bool = false
     @State private var showingClearedTempAlert: Bool = false
     @State private var resolverEndpoint: String = MediaResolverService.shared.resolverEndpoint
+    @State private var resolverAPIKey: String = MediaResolverService.shared.resolverAPIKey
     
     private let storage = FileStorageService.shared
     
@@ -101,7 +102,27 @@ struct SettingsView: View {
                             .onChange(of: resolverEndpoint) { _, newValue in
                                 MediaResolverService.shared.resolverEndpoint = newValue
                             }
-                        Text("Used to resolve YouTube, TikTok, and web streams into direct MP4 downloads. Compatible with open-source Cobalt API instances.")
+                        Text("Used to resolve YouTube and web streams into direct MP4 downloads. Compatible with open-source Cobalt API instances.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 2)
+                    
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Label("API Key / Bearer Token", systemImage: "key.fill")
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(.orange)
+                            Spacer()
+                        }
+                        SecureField("Optional (required by api.cobalt.tools)", text: $resolverAPIKey)
+                            .font(.subheadline)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .onChange(of: resolverAPIKey) { _, newValue in
+                                MediaResolverService.shared.resolverAPIKey = newValue
+                            }
+                        Text("The official api.cobalt.tools instance requires an API key or JWT token. Self-hosted instances run without an API key.")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
