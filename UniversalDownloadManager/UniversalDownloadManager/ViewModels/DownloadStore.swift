@@ -359,6 +359,7 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         
         item.status = .completed
         item.localFilename = localFilename
+        item.displayFilename = localFilename
         item.bytesReceived = fileSize
         item.expectedTotalBytes = fileSize
         item.currentSpeed = nil

@@ -253,7 +253,8 @@ struct AddDownloadView: View {
             return
         }
         
-        let filename = customFilename.isEmpty ? suggestedFilename : customFilename
+        let userSpecified = customFilename.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filename = userSpecified.isEmpty ? nil : userSpecified
         store.addDownload(url: url, customFilename: filename)
         dismiss()
     }

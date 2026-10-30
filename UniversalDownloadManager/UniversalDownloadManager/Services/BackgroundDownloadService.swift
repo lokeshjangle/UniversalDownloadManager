@@ -339,14 +339,30 @@ extension BackgroundDownloadService: URLSessionDownloadDelegate {
     
     private func parseFilenameFromContentDisposition(_ header: String) -> String? {
         let parts = header.components(separatedBy: ";")
+        var standardName: String?
+        var extendedName: String?
+        
         for part in parts {
             let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.lowercased().hasPrefix("filename=") {
+            let lower = trimmed.lowercased()
+            
+            if lower.hasPrefix("filename*=") {
+                // RFC 5987 / RFC 6266 format: filename*=UTF-8''filename.ext or charset'lang'encoded-value
+                let raw = String(trimmed.dropFirst("filename*=".count)).trimmingCharacters(in: CharacterSet(charactersIn: "\" '"))
+                let subParts = raw.components(separatedBy: "''")
+                if subParts.count >= 2 {
+                    let encodedValue = subParts.dropFirst().joined(separator: "''")
+                    extendedName = encodedValue.removingPercentEncoding ?? encodedValue
+                } else {
+                    extendedName = raw.removingPercentEncoding ?? raw
+                }
+            } else if lower.hasPrefix("filename=") {
                 let name = String(trimmed.dropFirst("filename=".count))
-                return name.trimmingCharacters(in: CharacterSet(charactersIn: "\" '"))
+                standardName = name.trimmingCharacters(in: CharacterSet(charactersIn: "\" '"))
             }
         }
-        return nil
+        
+        return extendedName ?? standardName
     }
 }
 
