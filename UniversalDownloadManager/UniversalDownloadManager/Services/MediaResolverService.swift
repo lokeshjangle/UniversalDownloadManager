@@ -113,12 +113,8 @@ final class MediaResolverService: Sendable {
             )
             
         case .instagram:
-            // 1. Attempt direct in-app extraction via OpenGraph / schema metadata (fastest, private)
-            if let directResult = try? await resolveInstagramClientSide(url: url) {
-                return directResult
-            }
-            // 2. Fallback to resolver API if client-side extraction encounters login wall
-            return try await resolveViaAPI(url: url, platform: .instagram)
+            // Instagram extraction is 100% on-device/client-side and does NOT use Cobalt API
+            return try await resolveInstagramClientSide(url: url)
             
         case .youtube, .tiktok, .twitter:
             return try await resolveViaAPI(url: url, platform: platform)
@@ -129,45 +125,67 @@ final class MediaResolverService: Sendable {
     
     /// Direct in-app client-side scraper for public Instagram Reels without requiring any API keys.
     private func resolveInstagramClientSide(url: URL) async throws -> ResolvedMediaItem {
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
-        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
-        request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
-        request.timeoutInterval = 12.0
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode),
-              let html = String(data: data, encoding: .utf8) else {
-            throw NSError(domain: "MediaResolverError", code: 404, userInfo: [NSLocalizedDescriptionKey: "Failed to load Instagram webpage."])
-        }
-        
-        // Extract direct CDN video URL
-        guard let directURLString = extractVideoURLFromHTML(html),
-              let directURL = URL(string: directURLString) else {
-            throw NSError(domain: "MediaResolverError", code: 422, userInfo: [NSLocalizedDescriptionKey: "No public video stream found on this Instagram page."])
-        }
-        
-        // Derive clean filename and title
         let shortcode = extractShortcode(from: url)
-        let filename = "Instagram_Reel_\(shortcode).mp4"
-        let title = extractMetaProperty(html: html, property: "og:title")
         
-        return ResolvedMediaItem(
-            originalURL: url,
-            directURL: directURL,
-            filename: filename,
-            title: title,
-            platform: .instagram
-        )
+        // Candidate URLs to inspect in order
+        var candidateURLs: [URL] = [url]
+        if let embedURL = URL(string: "https://www.instagram.com/reel/\(shortcode)/embed/captioned/") {
+            candidateURLs.append(embedURL)
+        }
+        if let embedURL2 = URL(string: "https://www.instagram.com/p/\(shortcode)/embed/") {
+            candidateURLs.append(embedURL2)
+        }
+        
+        let userAgents = [
+            "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+        ]
+        
+        for candidate in candidateURLs {
+            for ua in userAgents {
+                var request = URLRequest(url: candidate)
+                request.httpMethod = "GET"
+                request.setValue(ua, forHTTPHeaderField: "User-Agent")
+                request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
+                request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+                request.timeoutInterval = 8.0
+                
+                guard let (data, response) = try? await URLSession.shared.data(for: request),
+                      let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode),
+                      let html = String(data: data, encoding: .utf8) else {
+                    continue
+                }
+                
+                if let directURLString = extractVideoURLFromHTML(html),
+                   let directURL = URL(string: directURLString) {
+                    let filename = "Instagram_Reel_\(shortcode).mp4"
+                    let title = extractMetaProperty(html: html, property: "og:title")
+                    
+                    return ResolvedMediaItem(
+                        originalURL: url,
+                        directURL: directURL,
+                        filename: filename,
+                        title: title,
+                        platform: .instagram
+                    )
+                }
+            }
+        }
+        
+        throw NSError(domain: "MediaResolverError", code: 404, userInfo: [
+            NSLocalizedDescriptionKey: "Unable to extract video from this Instagram link. The post may be from a private account, or you can open it in Safari and download with our Safari Web Extension."
+        ])
     }
     
     private func extractVideoURLFromHTML(_ html: String) -> String? {
         let patterns = [
+            "\"video_url\"\\s*:\\s*\"([^\"]+)\"",
+            "\"playback_url\"\\s*:\\s*\"([^\"]+)\"",
             "<meta\\s+property=[\"']og:video(?::secure_url)?[\"']\\s+content=[\"']([^\"']+)[\"']",
             "<meta\\s+content=[\"']([^\"']+)[\"']\\s+property=[\"']og:video(?::secure_url)?[\"']",
             "\"contentUrl\"\\s*:\\s*\"([^\"]+)\"",
-            "\"video_url\"\\s*:\\s*\"([^\"]+)\""
+            "<video[^>]+src=[\"']([^\"']+)[\"']"
         ]
         
         for pattern in patterns {
