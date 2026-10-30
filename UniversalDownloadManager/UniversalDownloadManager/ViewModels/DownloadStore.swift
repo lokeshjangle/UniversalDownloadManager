@@ -41,6 +41,9 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         // Load persisted items or populate initial sample test files
         loadInitialState()
         recalculateStorage()
+        
+        // Automatically start queued items up to concurrency limit
+        processQueue()
     }
     
     // MARK: - Initial State & Persistence
@@ -288,6 +291,7 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
     func resetToSampleData() {
         loadSampleData()
         persistState()
+        processQueue()
     }
     
     private func loadSampleData() {

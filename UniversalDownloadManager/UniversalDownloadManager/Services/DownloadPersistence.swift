@@ -56,3 +56,4 @@ final class DownloadPersistence: Sendable {
         try? FileManager.default.removeItem(at: metadataFileURL)
     }
 }
+
