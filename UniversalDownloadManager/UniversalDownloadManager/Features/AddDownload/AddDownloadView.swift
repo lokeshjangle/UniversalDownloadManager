@@ -108,7 +108,7 @@ struct AddDownloadView: View {
                 // Section 2: Filename Customization (revealed when valid)
                 if isValid {
                     Section("File Name") {
-                        TextField("File name", text: $customFilename)
+                        TextField(suggestedFilename.isEmpty ? "File name (optional)" : suggestedFilename, text: $customFilename)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
                     }
@@ -239,9 +239,6 @@ struct AddDownloadView: View {
             validationError = nil
             let suggested = coordinator.suggestedFilename(for: url)
             suggestedFilename = suggested
-            if customFilename.isEmpty {
-                customFilename = suggested
-            }
         } else {
             isValid = false
             validationError = "Please enter a valid HTTP or HTTPS URL."
