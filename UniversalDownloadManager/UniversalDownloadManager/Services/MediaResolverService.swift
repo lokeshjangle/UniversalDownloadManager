@@ -92,25 +92,46 @@ final class MediaResolverService: Sendable {
         guard let host = url.host?.lowercased() else { return .direct }
         let path = url.path.lowercased()
         
-        if host.contains("instagram.com") || host.contains("instagr.am") {
-            if path.contains("/reel") || path.contains("/p/") || path.contains("/tv/") {
+        if isInstagramHost(host) {
+            if path.contains("/reel") || path.contains("/p/") || path.contains("/tv/") || path.contains("/stories/") {
                 return .instagram
             }
         }
         
-        if host.contains("youtube.com") || host.contains("youtu.be") {
+        if isYouTubeHost(host) {
             return .youtube
         }
         
-        if host.contains("tiktok.com") {
+        if isTikTokHost(host) {
             return .tiktok
         }
         
-        if host.contains("twitter.com") || host.contains("x.com") {
+        if isTwitterHost(host) {
             return .twitter
         }
         
         return .direct
+    }
+    
+    // MARK: - Strict Domain Validation Helpers (Anti-Spoofing & Cookie Leak Prevention)
+    
+    private func isInstagramHost(_ host: String) -> Bool {
+        host == "instagram.com" || host.hasSuffix(".instagram.com") ||
+        host == "instagr.am" || host.hasSuffix(".instagr.am")
+    }
+    
+    private func isYouTubeHost(_ host: String) -> Bool {
+        host == "youtube.com" || host.hasSuffix(".youtube.com") ||
+        host == "youtu.be" || host.hasSuffix(".youtu.be")
+    }
+    
+    private func isTikTokHost(_ host: String) -> Bool {
+        host == "tiktok.com" || host.hasSuffix(".tiktok.com")
+    }
+    
+    private func isTwitterHost(_ host: String) -> Bool {
+        host == "twitter.com" || host.hasSuffix(".twitter.com") ||
+        host == "x.com" || host.hasSuffix(".x.com")
     }
     
     // MARK: - Stream Resolution
@@ -159,26 +180,46 @@ final class MediaResolverService: Sendable {
         }
     }
     
-    /// Direct in-app client-side scraper for public Instagram Reels without requiring any API keys.
-    /// Evaluates multiple stream representations and selects the highest quality MP4 stream.
+    /// Direct in-app client-side scraper for Instagram Reels & Stories.
+    /// Uses persistent session cookies from In-App Browser to unlock Stories and private accounts.
     private func resolveInstagramClientSide(url: URL) async throws -> ResolvedMediaItem {
+        guard let host = url.host?.lowercased(), isInstagramHost(host) else {
+            throw NSError(domain: "MediaResolverError", code: 400, userInfo: [
+                NSLocalizedDescriptionKey: "Invalid Instagram URL format."
+            ])
+        }
+        
+        let isStory = url.path.lowercased().contains("/stories/")
         let shortcode = extractShortcode(from: url)
         
+        // Fetch session tokens from InstagramSessionManager
+        let isLoggedIn = await InstagramSessionManager.shared.isLoggedIn
+        let cookieHeader = await InstagramSessionManager.shared.cookieHeader
+        
+        // Stories strictly require an authenticated Instagram session
+        if isStory && !isLoggedIn {
+            throw NSError(domain: "MediaResolverError", code: 401, userInfo: [
+                NSLocalizedDescriptionKey: "Instagram Stories require an active login session. Open the In-App Browser to log into your account once, or browse directly to the story in the browser to download."
+            ])
+        }
+        
         // Candidate URLs to inspect in priority order
-        var candidateURLs: [URL] = [
-            url,
-            URL(string: "https://www.instagram.com/reel/\(shortcode)/") ?? url,
-            URL(string: "https://www.instagram.com/p/\(shortcode)/") ?? url,
-            URL(string: "https://www.instagram.com/reel/\(shortcode)/embed/") ?? url,
-            URL(string: "https://www.instagram.com/p/\(shortcode)/embed/") ?? url,
-            URL(string: "https://www.instagram.com/reel/\(shortcode)/embed/captioned/") ?? url
-        ]
+        var candidateURLs: [URL] = [url]
+        if !isStory {
+            candidateURLs.append(contentsOf: [
+                URL(string: "https://www.instagram.com/reel/\(shortcode)/") ?? url,
+                URL(string: "https://www.instagram.com/p/\(shortcode)/") ?? url,
+                URL(string: "https://www.instagram.com/reel/\(shortcode)/embed/") ?? url,
+                URL(string: "https://www.instagram.com/p/\(shortcode)/embed/") ?? url,
+                URL(string: "https://www.instagram.com/reel/\(shortcode)/embed/captioned/") ?? url
+            ])
+        }
         // Remove exact duplicates
         candidateURLs = candidateURLs.reduce(into: [URL]()) { if !$0.contains($1) { $0.append($1) } }
         
         let userAgents = [
-            "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
             "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+            "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
             "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)"
         ]
         
@@ -192,6 +233,13 @@ final class MediaResolverService: Sendable {
                 request.setValue(ua, forHTTPHeaderField: "User-Agent")
                 request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
                 request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+                
+                // Security check: Only attach sensitive session cookies to verified Instagram hosts
+                if let cookieHeader, let candHost = candidate.host?.lowercased(), isInstagramHost(candHost) {
+                    request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+                    request.setValue("https://www.instagram.com/", forHTTPHeaderField: "Referer")
+                }
+                
                 request.timeoutInterval = 8.0
                 
                 guard let (data, response) = try? await URLSession.shared.data(for: request),
@@ -222,8 +270,11 @@ final class MediaResolverService: Sendable {
         }
         
         guard !collectedCandidates.isEmpty else {
+            let errorMsg = isStory
+                ? "Unable to extract video for this story. Open the In-App Browser to view the story directly — our media sniffer will detect and download it!"
+                : "Unable to extract video from this Instagram link. If this is a private account, ensure you are logged into Instagram in the In-App Browser."
             throw NSError(domain: "MediaResolverError", code: 404, userInfo: [
-                NSLocalizedDescriptionKey: "Unable to extract video from this Instagram link. The post may be from a private account, or you can open it in Safari and download with our Safari Web Extension."
+                NSLocalizedDescriptionKey: errorMsg
             ])
         }
         
@@ -256,11 +307,11 @@ final class MediaResolverService: Sendable {
             bestCandidate = firstInitial
         } else {
             throw NSError(domain: "MediaResolverError", code: 404, userInfo: [
-                NSLocalizedDescriptionKey: "Unable to verify a valid playable video stream for this reel."
+                NSLocalizedDescriptionKey: "Unable to verify a valid playable video stream for this media."
             ])
         }
         
-        let filename = "Instagram_Reel_\(shortcode).mp4"
+        let filename = isStory ? "Instagram_Story_\(shortcode).mp4" : "Instagram_Reel_\(shortcode).mp4"
         return ResolvedMediaItem(
             originalURL: url,
             directURL: bestCandidate.url,
@@ -473,6 +524,12 @@ final class MediaResolverService: Sendable {
         if let reelIndex = components.firstIndex(where: { $0 == "reel" || $0 == "p" || $0 == "tv" }),
            reelIndex + 1 < components.count {
             return components[reelIndex + 1]
+        }
+        if let storyIndex = components.firstIndex(where: { $0 == "stories" }),
+           storyIndex + 1 < components.count {
+            let username = components[storyIndex + 1]
+            let storyId = storyIndex + 2 < components.count ? components[storyIndex + 2] : "latest"
+            return "\(username)_\(storyId)"
         }
         return String(UUID().uuidString.prefix(8))
     }

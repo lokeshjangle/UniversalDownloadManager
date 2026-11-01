@@ -12,49 +12,10 @@ struct AddDownloadView: View {
     @State private var isValid: Bool = false
     @State private var detectedPlatform: SupportedPlatform = .direct
     @State private var isResolvingMedia: Bool = false
+    @State private var showingBrowser: Bool = false
+    @State private var browserTargetURL: URL?
     
     private let coordinator = DownloadCoordinator.shared
-    
-    // Real, accessible test files for Phase 3 download engine verification
-    private struct PresetDownload: Identifiable {
-        let id = UUID()
-        let title: String
-        let url: String
-        let filename: String
-        let icon: String
-        let sizeNote: String
-    }
-    
-    private let presets: [PresetDownload] = [
-        PresetDownload(
-            title: "Quick Test: Swift README",
-            url: "https://raw.githubusercontent.com/apple/swift/main/README.md",
-            filename: "Swift_README.md",
-            icon: "doc.text.fill",
-            sizeNote: "25 KB"
-        ),
-        PresetDownload(
-            title: "1 MB Benchmark File",
-            url: "https://proof.ovh.net/files/1Mb.dat",
-            filename: "1Mb_test_file.dat",
-            icon: "doc.zipper",
-            sizeNote: "1 MB"
-        ),
-        PresetDownload(
-            title: "10 MB Test File",
-            url: "https://proof.ovh.net/files/10Mb.dat",
-            filename: "10Mb_test_file.dat",
-            icon: "externaldrive.fill",
-            sizeNote: "10 MB"
-        ),
-        PresetDownload(
-            title: "Sample Video: For Bigger Blazes",
-            url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
-            filename: "ForBiggerBlazes.mp4",
-            icon: "film.fill",
-            sizeNote: "15 MB"
-        )
-    ]
     
     var body: some View {
         NavigationStack {
@@ -132,14 +93,18 @@ struct AddDownloadView: View {
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
                                         
-                                        Link(destination: targetURL) {
+                                        Button {
+                                            browserTargetURL = targetURL
+                                            showingBrowser = true
+                                        } label: {
                                             HStack(spacing: 4) {
                                                 Image(systemName: "safari")
-                                                Text("Open in Safari for Original 1080p (Logged-In)")
+                                                Text("Open in In-App Browser (Stories & Private Accounts)")
                                             }
                                             .font(.caption2.bold())
                                             .foregroundStyle(.purple)
                                         }
+                                        .buttonStyle(.plain)
                                         .padding(.top, 2)
                                     }
                                 }
@@ -163,39 +128,35 @@ struct AddDownloadView: View {
                     }
                 }
                 
-                // Section 3: Preset / Quick Test URLs
-                Section("Quick Test Presets (Real HTTP Files)") {
-                    ForEach(presets) { preset in
-                        Button {
-                            urlText = preset.url
-                            customFilename = preset.filename
-                            validateInput(preset.url)
-                        } label: {
-                            HStack {
-                                Image(systemName: preset.icon)
-                                    .foregroundStyle(AppTheme.accentColor)
-                                    .frame(width: 24)
-                                
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(preset.title)
-                                        .font(.body)
-                                        .foregroundStyle(.primary)
-                                    Text(preset.filename)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                
-                                Spacer()
-                                
-                                Text(preset.sizeNote)
-                                    .font(.caption.bold())
+                // Section 3: In-App Browser Shortcut
+                Section {
+                    Button {
+                        browserTargetURL = URL(string: "https://www.instagram.com")
+                        showingBrowser = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "camera.circle.fill")
+                                .font(.title2)
+                                .foregroundStyle(.purple)
+                            
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Browse Instagram Stories & Reels")
+                                    .font(.subheadline.bold())
+                                    .foregroundStyle(.primary)
+                                Text("Log in once & download private stories or reels with 1 tap")
+                                    .font(.caption2)
                                     .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(.quaternary, in: .capsule)
                             }
+                            
+                            Spacer()
+                            
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
+                } header: {
+                    Text("In-App Story & Video Browser")
                 }
                 
                 // Section 4: Stacked Action Buttons (Up & Down)
@@ -275,6 +236,9 @@ struct AddDownloadView: View {
                     }
                     .accessibilityLabel("Close")
                 }
+            }
+            .sheet(isPresented: $showingBrowser) {
+                InAppBrowserView(store: store, initialURL: browserTargetURL ?? URL(string: "https://www.instagram.com")!)
             }
         }
     }

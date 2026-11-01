@@ -26,6 +26,13 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
     /// Auto-retry failed downloads setting.
     @Published var autoRetry: Bool = true
     
+    /// Auto-save downloaded media directly to Photos app Camera Roll
+    @Published var autoSaveToPhotos: Bool {
+        didSet {
+            UserDefaults.standard.set(autoSaveToPhotos, forKey: "autoSaveToPhotos")
+        }
+    }
+    
     /// Total bytes currently stored by completed downloads on disk.
     @Published var totalStorageUsed: Int64 = 0
     
@@ -42,6 +49,13 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
     private let storage = FileStorageService.shared
     
     init() {
+        // Load autoSaveToPhotos setting (defaults to true)
+        if UserDefaults.standard.object(forKey: "autoSaveToPhotos") == nil {
+            self.autoSaveToPhotos = true
+        } else {
+            self.autoSaveToPhotos = UserDefaults.standard.bool(forKey: "autoSaveToPhotos")
+        }
+        
         // Connect as delegate to background service
         BackgroundDownloadService.shared.delegate = self
         
@@ -144,11 +158,25 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
     
     private func loadInitialState() {
         let savedItems = persistence.loadItems()
-        if !savedItems.isEmpty {
-            self.items = savedItems
-        } else {
-            loadSampleData()
+        let testKeywords = ["test", "benchmark", "readme", "blazes", "chromeshared", "sample", "license", "swift_license"]
+        
+        // Purge any mock/benchmark files from disk
+        for item in savedItems {
+            let name = item.displayFilename.lowercased()
+            if testKeywords.contains(where: { name.contains($0) }) {
+                if let local = item.localFilename {
+                    storage.deleteFile(filename: local)
+                }
+            }
         }
+        
+        let cleaned = savedItems.filter { item in
+            let name = item.displayFilename.lowercased()
+            return !testKeywords.contains(where: { name.contains($0) })
+        }
+        
+        self.items = cleaned
+        persistState()
     }
     
     private func persistState() {
@@ -183,6 +211,12 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         let pending = PendingRequestsStore.shared.fetchAndClearPendingRequests()
         for request in pending {
             if let validURL = coordinator.validateURL(request.urlString) {
+                // Security check: Block automated private/local intranet network probing from external handoff
+                if coordinator.isPrivateOrLocalAddress(url: validURL) {
+                    notificationMessage = "Security Notice: Handoff download targeting private network address was blocked."
+                    continue
+                }
+                
                 let item = addDownload(url: validURL, customFilename: request.customFilename)
                 notificationMessage = "Added download from \(request.sourceApp ?? "Chrome"): \(item.displayFilename)"
             }
@@ -382,6 +416,20 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
         item.estimatedTimeRemaining = nil
         item.completedAt = Date()
         
+        // Auto-save media to Photos Camera Roll if enabled and format is supported
+        if autoSaveToPhotos && PhotoLibraryService.shared.isMediaFile(filename: localFilename) {
+            if let fileURL = storage.fileURL(for: localFilename) {
+                Task {
+                    do {
+                        try await PhotoLibraryService.shared.saveMediaToPhotos(fileURL: fileURL)
+                        print("[DownloadStore] Successfully auto-saved \(localFilename) to Photos Camera Roll.")
+                    } catch {
+                        print("[DownloadStore] Auto-save to Photos error: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+        
         persistState()
         processQueue()
     }
@@ -425,38 +473,5 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
     func clearTemporaryFiles() {
         storage.clearAllFiles()
         recalculateStorage()
-    }
-    
-    // MARK: - Sample & Reset Data
-    
-    func resetToSampleData() {
-        loadSampleData()
-        persistState()
-        processQueue()
-    }
-    
-    private func loadSampleData() {
-        let now = Date()
-        
-        items = [
-            DownloadItem(
-                id: UUID(),
-                url: URL(string: "https://proof.ovh.net/files/1Mb.dat")!,
-                displayFilename: "1Mb_test_file.dat",
-                status: .queued,
-                bytesReceived: 0,
-                expectedTotalBytes: 1_048_576,
-                createdAt: now
-            ),
-            DownloadItem(
-                id: UUID(),
-                url: URL(string: "https://raw.githubusercontent.com/apple/swift/main/README.md")!,
-                displayFilename: "Swift_README.md",
-                status: .queued,
-                bytesReceived: 0,
-                expectedTotalBytes: 25_000,
-                createdAt: now.addingTimeInterval(-10)
-            )
-        ]
     }
 }

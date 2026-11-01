@@ -4,8 +4,9 @@ import SwiftUI
 /// storage limits, and integration status.
 struct SettingsView: View {
     @ObservedObject var store: DownloadStore
-    @State private var showingResetAlert: Bool = false
+    @StateObject private var sessionManager = InstagramSessionManager.shared
     @State private var showingClearedTempAlert: Bool = false
+    @State private var showingBrowser: Bool = false
     @State private var resolverEndpoint: String = MediaResolverService.shared.resolverEndpoint
     @State private var resolverAPIKey: String = MediaResolverService.shared.resolverAPIKey
     
@@ -50,6 +51,10 @@ struct SettingsView: View {
                         }
                     }
                     
+                    Toggle(isOn: $store.autoSaveToPhotos) {
+                        Label("Auto-Save to Photos App", systemImage: "photo.on.rectangle.angled")
+                    }
+                    
                     HStack {
                         Label("Storage Used", systemImage: "internaldrive")
                         Spacer()
@@ -65,10 +70,53 @@ struct SettingsView: View {
                 } header: {
                     Text("Storage & Save Location")
                 } footer: {
-                    Text("Tap 'Download Location' to visually browse folders or select a destination in the Apple Files app.")
+                    Text("Tap 'Download Location' to visually browse folders or select a destination in the Apple Files app. When 'Auto-Save' is enabled, videos and photos automatically appear in your iOS Photos Camera Roll.")
                 }
                 
-                // Section 3: Media Stream Resolver (Instagram & YouTube)
+                // Section 3: Instagram Account & In-App Browser
+                Section {
+                    HStack {
+                        Label("Instagram Account", systemImage: "camera.circle.fill")
+                            .foregroundStyle(.purple)
+                        Spacer()
+                        if sessionManager.isLoggedIn {
+                            Text("Logged In")
+                                .font(.caption.bold())
+                                .foregroundStyle(AppTheme.successColor)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(AppTheme.successColor.opacity(0.12), in: .capsule)
+                        } else {
+                            Text("Not Connected")
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Color.secondary.opacity(0.12), in: .capsule)
+                        }
+                    }
+                    
+                    Button {
+                        showingBrowser = true
+                    } label: {
+                        Label(sessionManager.isLoggedIn ? "Open In-App Browser" : "Log In via In-App Browser", systemImage: "safari")
+                            .foregroundStyle(.primary)
+                    }
+                    
+                    if sessionManager.isLoggedIn {
+                        Button("Log Out of Instagram", role: .destructive) {
+                            Task {
+                                await sessionManager.clearSession()
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Instagram Session & Stories")
+                } footer: {
+                    Text("Log in once inside the In-App Browser to unlock downloading stories and media from private accounts you follow. Cookies remain safely on your device.")
+                }
+                
+                // Section 4: Media Stream Resolver (Instagram & YouTube)
                 Section {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
@@ -148,16 +196,6 @@ struct SettingsView: View {
                     }
                 }
                 
-                // Section 4: Testing & Demo Controls
-                Section("Demo & Test Controls") {
-                    Button {
-                        showingResetAlert = true
-                    } label: {
-                        Label("Reset with Real Test Links", systemImage: "arrow.counterclockwise")
-                            .foregroundStyle(AppTheme.accentColor)
-                    }
-                }
-                
                 // Section 5: Background Reliability & About
                 Section("System & Reliability") {
                     NavigationLink {
@@ -199,18 +237,13 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
-            .alert("Reset Test Links?", isPresented: $showingResetAlert) {
-                Button("Reset Data", role: .destructive) {
-                    store.resetToSampleData()
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("This populates the queue with real test URLs ready for download.")
-            }
             .alert("Storage & Cache Cleared", isPresented: $showingClearedTempAlert) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("All downloaded files and resume fragments have been removed from local storage.")
+            }
+            .sheet(isPresented: $showingBrowser) {
+                InAppBrowserView(store: store)
             }
         }
     }

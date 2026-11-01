@@ -4,6 +4,7 @@ import SwiftUI
 struct DashboardView: View {
     @ObservedObject var store: DownloadStore
     @State private var showingAddDownload = false
+    @State private var showingBrowser = false
     @State private var selectedTab: DashboardFilter = .all
     @State private var selectedDetailId: UUID?
     
@@ -104,6 +105,20 @@ struct DashboardView: View {
             }
         }
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    showingBrowser = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "safari")
+                        Text("Browser")
+                            .font(.caption.bold())
+                    }
+                    .foregroundStyle(.purple)
+                }
+                .accessibilityLabel("In-App Browser")
+            }
+            
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     showingAddDownload = true
@@ -116,6 +131,9 @@ struct DashboardView: View {
         }
         .sheet(isPresented: $showingAddDownload) {
             AddDownloadView(store: store)
+        }
+        .sheet(isPresented: $showingBrowser) {
+            InAppBrowserView(store: store)
         }
     }
     

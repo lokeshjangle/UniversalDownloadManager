@@ -6,6 +6,7 @@ struct DownloadDetailsView: View {
     let itemId: UUID
     @Environment(\.dismiss) private var dismiss
     @State private var showingCopiedAlert: Bool = false
+    @State private var photosFeedbackMessage: String?
     
     private var item: DownloadItem? {
         store.items.first(where: { $0.id == itemId })
@@ -235,6 +236,13 @@ struct DownloadDetailsView: View {
                     case .completed:
                         if let localName = item.localFilename,
                            let fileURL = FileStorageService.shared.fileURL(for: localName) {
+                            
+                            if PhotoLibraryService.shared.isMediaFile(filename: localName) {
+                                GlassActionButton("Save to Photos (Camera Roll)", systemImage: "photo.badge.arrow.down", isProminent: true) {
+                                    saveFileToPhotos(fileURL: fileURL)
+                                }
+                            }
+                            
                             ShareLink(item: fileURL) {
                                 HStack(spacing: 6) {
                                     Image(systemName: "square.and.arrow.up")
@@ -275,6 +283,44 @@ struct DownloadDetailsView: View {
                 .onAppear {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                         showingCopiedAlert = false
+                    }
+                }
+            }
+            
+            if let msg = photosFeedbackMessage {
+                VStack {
+                    Spacer()
+                    GlassBadge(msg, iconName: "photo.badge.checkmark", color: AppTheme.successColor)
+                        .padding(.bottom, 24)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .onAppear {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                        withAnimation {
+                            photosFeedbackMessage = nil
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // MARK: - Photo Library Action
+    
+    private func saveFileToPhotos(fileURL: URL) {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        Task {
+            do {
+                try await PhotoLibraryService.shared.saveMediaToPhotos(fileURL: fileURL)
+                await MainActor.run {
+                    withAnimation {
+                        photosFeedbackMessage = "Saved to Photos Camera Roll!"
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    withAnimation {
+                        photosFeedbackMessage = error.localizedDescription
                     }
                 }
             }
