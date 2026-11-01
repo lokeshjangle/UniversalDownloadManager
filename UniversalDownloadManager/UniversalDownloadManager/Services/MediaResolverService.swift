@@ -29,6 +29,26 @@ struct ResolvedMediaItem: Sendable {
     let filename: String
     let title: String?
     let platform: SupportedPlatform
+    let qualityLabel: String?
+    let estimatedSizeBytes: Int64?
+    
+    init(
+        originalURL: URL,
+        directURL: URL,
+        filename: String,
+        title: String?,
+        platform: SupportedPlatform,
+        qualityLabel: String? = nil,
+        estimatedSizeBytes: Int64? = nil
+    ) {
+        self.originalURL = originalURL
+        self.directURL = directURL
+        self.filename = filename
+        self.title = title
+        self.platform = platform
+        self.qualityLabel = qualityLabel
+        self.estimatedSizeBytes = estimatedSizeBytes
+    }
 }
 
 /// Service that detects social and streaming video URLs and resolves them into direct downloadable MP4 streams.
@@ -123,23 +143,47 @@ final class MediaResolverService: Sendable {
     
     // MARK: - In-App Instagram Reel Extractor
     
+    /// Represents a scored video stream candidate with detected resolution and bitrate.
+    private struct ScoredVideoCandidate: Hashable {
+        let url: URL
+        var score: Int
+        var qualityLabel: String
+        var contentLength: Int64?
+        
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(url)
+        }
+        
+        static func == (lhs: ScoredVideoCandidate, rhs: ScoredVideoCandidate) -> Bool {
+            lhs.url == rhs.url
+        }
+    }
+    
     /// Direct in-app client-side scraper for public Instagram Reels without requiring any API keys.
+    /// Evaluates multiple stream representations and selects the highest quality MP4 stream.
     private func resolveInstagramClientSide(url: URL) async throws -> ResolvedMediaItem {
         let shortcode = extractShortcode(from: url)
         
-        // Candidate URLs to inspect in order
-        var candidateURLs: [URL] = [url]
-        if let embedURL = URL(string: "https://www.instagram.com/reel/\(shortcode)/embed/captioned/") {
-            candidateURLs.append(embedURL)
-        }
-        if let embedURL2 = URL(string: "https://www.instagram.com/p/\(shortcode)/embed/") {
-            candidateURLs.append(embedURL2)
-        }
+        // Candidate URLs to inspect in priority order
+        var candidateURLs: [URL] = [
+            url,
+            URL(string: "https://www.instagram.com/reel/\(shortcode)/") ?? url,
+            URL(string: "https://www.instagram.com/p/\(shortcode)/") ?? url,
+            URL(string: "https://www.instagram.com/reel/\(shortcode)/embed/") ?? url,
+            URL(string: "https://www.instagram.com/p/\(shortcode)/embed/") ?? url,
+            URL(string: "https://www.instagram.com/reel/\(shortcode)/embed/captioned/") ?? url
+        ]
+        // Remove exact duplicates
+        candidateURLs = candidateURLs.reduce(into: [URL]()) { if !$0.contains($1) { $0.append($1) } }
         
         let userAgents = [
-            "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+            "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+            "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)"
         ]
+        
+        var collectedCandidates = Set<ScoredVideoCandidate>()
+        var foundTitle: String?
         
         for candidate in candidateURLs {
             for ua in userAgents {
@@ -157,49 +201,260 @@ final class MediaResolverService: Sendable {
                     continue
                 }
                 
-                if let directURLString = extractVideoURLFromHTML(html),
-                   let directURL = URL(string: directURLString) {
-                    let filename = "Instagram_Reel_\(shortcode).mp4"
-                    let title = extractMetaProperty(html: html, property: "og:title")
-                    
-                    return ResolvedMediaItem(
-                        originalURL: url,
-                        directURL: directURL,
-                        filename: filename,
-                        title: title,
-                        platform: .instagram
-                    )
+                if foundTitle == nil {
+                    foundTitle = extractMetaProperty(html: html, property: "og:title")
+                }
+                
+                let candidatesInPage = extractAllVideoCandidates(from: html)
+                for cand in candidatesInPage {
+                    collectedCandidates.insert(cand)
+                }
+                
+                // If we already found a full HD 1080p stream, we can proceed to verification
+                if collectedCandidates.contains(where: { $0.qualityLabel.contains("1080") }) {
+                    break
+                }
+            }
+            
+            if collectedCandidates.contains(where: { $0.qualityLabel.contains("1080") }) {
+                break
+            }
+        }
+        
+        guard !collectedCandidates.isEmpty else {
+            throw NSError(domain: "MediaResolverError", code: 404, userInfo: [
+                NSLocalizedDescriptionKey: "Unable to extract video from this Instagram link. The post may be from a private account, or you can open it in Safari and download with our Safari Web Extension."
+            ])
+        }
+        
+        // Sort candidates by initial score descending
+        let sortedInitial = collectedCandidates.sorted { $0.score > $1.score }
+        let topCandidates = Array(sortedInitial.prefix(3))
+        
+        // Perform concurrent HEAD probes on top candidates to check accessibility and content length
+        var verifiedCandidates: [ScoredVideoCandidate] = []
+        await withTaskGroup(of: ScoredVideoCandidate?.self) { group in
+            for cand in topCandidates {
+                group.addTask {
+                    await self.probeCandidateQuality(candidate: cand)
+                }
+            }
+            for await verified in group {
+                if let verified {
+                    verifiedCandidates.append(verified)
                 }
             }
         }
         
-        throw NSError(domain: "MediaResolverError", code: 404, userInfo: [
-            NSLocalizedDescriptionKey: "Unable to extract video from this Instagram link. The post may be from a private account, or you can open it in Safari and download with our Safari Web Extension."
-        ])
+        // Pick best verified candidate, or fallback to the highest scored initial candidate
+        let bestCandidate: ScoredVideoCandidate
+        if let topVerified = verifiedCandidates.max(by: {
+            ($0.contentLength ?? 0) < ($1.contentLength ?? 0)
+        }) {
+            bestCandidate = topVerified
+        } else if let firstInitial = sortedInitial.first {
+            bestCandidate = firstInitial
+        } else {
+            throw NSError(domain: "MediaResolverError", code: 404, userInfo: [
+                NSLocalizedDescriptionKey: "Unable to verify a valid playable video stream for this reel."
+            ])
+        }
+        
+        let filename = "Instagram_Reel_\(shortcode).mp4"
+        return ResolvedMediaItem(
+            originalURL: url,
+            directURL: bestCandidate.url,
+            filename: filename,
+            title: foundTitle,
+            platform: .instagram,
+            qualityLabel: bestCandidate.qualityLabel,
+            estimatedSizeBytes: bestCandidate.contentLength
+        )
     }
     
-    private func extractVideoURLFromHTML(_ html: String) -> String? {
+    /// Probes a video candidate with an HTTP HEAD request to verify accessibility and file size.
+    private func probeCandidateQuality(candidate: ScoredVideoCandidate) async -> ScoredVideoCandidate? {
+        var req = URLRequest(url: candidate.url)
+        req.httpMethod = "HEAD"
+        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 4.0
+        
+        guard let (_, response) = try? await URLSession.shared.data(for: req),
+              let http = response as? HTTPURLResponse,
+              (200...299).contains(http.statusCode) else {
+            return nil
+        }
+        
+        var updated = candidate
+        let length = http.expectedContentLength
+        if length > 0 {
+            updated.contentLength = length
+            updated.score += Int(length / 1024) // Higher file size = higher bitrate
+            if length > 5_000_000 && !updated.qualityLabel.contains("1080") {
+                updated.qualityLabel = "High Bitrate HD"
+            }
+        }
+        return updated
+    }
+    
+    /// Extracts and scores all video stream candidates present in the HTML document.
+    private func extractAllVideoCandidates(from html: String) -> [ScoredVideoCandidate] {
+        var foundRawURLs = Set<String>()
+        
+        // 1. Direct scan for JSON video stream attributes (video_url, playback_url, contentUrl)
+        let keys = ["video_url", "playback_url", "contentUrl"]
+        for key in keys {
+            var searchStart = html.startIndex
+            while let keyRange = html[searchStart...].range(of: key) {
+                let afterKey = html[keyRange.upperBound...]
+                if let httpRange = afterKey.range(of: "https:") {
+                    let distance = html.distance(from: keyRange.upperBound, to: httpRange.lowerBound)
+                    if distance < 30 {
+                        let fromHttp = afterKey[httpRange.lowerBound...]
+                        var urlEndIndex = fromHttp.endIndex
+                        for delimiter in ["\\\"", "\"", "&quot;", "\\\\\"", "}", "]", "<", " "] {
+                            if let delimRange = fromHttp.range(of: delimiter) {
+                                if delimRange.lowerBound < urlEndIndex {
+                                    urlEndIndex = delimRange.lowerBound
+                                }
+                            }
+                        }
+                        
+                        let raw = cleanURLString(String(fromHttp[..<urlEndIndex]))
+                        if raw.contains(".mp4") {
+                            foundRawURLs.insert(raw)
+                        }
+                    }
+                }
+                searchStart = keyRange.upperBound
+            }
+        }
+        
+        // 2. Scan DASH Manifest <BaseURL> elements
+        if let manifestRange = html.range(of: "video_dash_manifest") {
+            let manifestSlice = html[manifestRange.upperBound...]
+            var searchStart = manifestSlice.startIndex
+            while let baseStart = manifestSlice[searchStart...].range(of: "https:") {
+                let fromHttp = manifestSlice[baseStart.lowerBound...]
+                var urlEndIndex = fromHttp.endIndex
+                for delimiter in ["\\\"", "\"", "&quot;", "\\\\\"", "<", " ", ">"] {
+                    if let delimRange = fromHttp.range(of: delimiter) {
+                        if delimRange.lowerBound < urlEndIndex {
+                            urlEndIndex = delimRange.lowerBound
+                        }
+                    }
+                }
+                let raw = cleanURLString(String(fromHttp[..<urlEndIndex]))
+                if raw.contains(".mp4") {
+                    foundRawURLs.insert(raw)
+                }
+                searchStart = baseStart.upperBound
+                if html.distance(from: manifestRange.upperBound, to: searchStart) > 25000 {
+                    break
+                }
+            }
+        }
+        
+        // 3. OpenGraph & HTML5 video element regex fallback
         let patterns = [
-            "\"video_url\"\\s*:\\s*\"([^\"]+)\"",
-            "\"playback_url\"\\s*:\\s*\"([^\"]+)\"",
             "<meta\\s+property=[\"']og:video(?::secure_url)?[\"']\\s+content=[\"']([^\"']+)[\"']",
             "<meta\\s+content=[\"']([^\"']+)[\"']\\s+property=[\"']og:video(?::secure_url)?[\"']",
-            "\"contentUrl\"\\s*:\\s*\"([^\"]+)\"",
             "<video[^>]+src=[\"']([^\"']+)[\"']"
         ]
         
         for pattern in patterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
-               let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
-               let range = Range(match.range(at: 1), in: html) {
-                var raw = String(html[range])
-                raw = raw.replacingOccurrences(of: "\\/", with: "/")
-                raw = raw.replacingOccurrences(of: "\\u0026", with: "&")
-                raw = raw.replacingOccurrences(of: "&amp;", with: "&")
-                return raw
+            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
+                let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
+                for match in matches {
+                    if let range = Range(match.range(at: 1), in: html) {
+                        let raw = cleanURLString(String(html[range]))
+                        if raw.contains(".mp4") || raw.contains("fbcdn.net") {
+                            foundRawURLs.insert(raw)
+                        }
+                    }
+                }
             }
         }
-        return nil
+        
+        // Score each candidate and filter out audio-only tracks
+        var candidates: [ScoredVideoCandidate] = []
+        for rawURL in foundRawURLs {
+            if let candidate = scoreAndCategorize(rawURL: rawURL) {
+                candidates.append(candidate)
+            }
+        }
+        return candidates
+    }
+    
+    private func cleanURLString(_ raw: String) -> String {
+        var s = raw
+        s = s.replacingOccurrences(of: "\\\\", with: "")
+        s = s.replacingOccurrences(of: "\\/", with: "/")
+        s = s.replacingOccurrences(of: "\\u0026", with: "&")
+        s = s.replacingOccurrences(of: "\\u00253D", with: "=")
+        s = s.replacingOccurrences(of: "&amp;", with: "&")
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    /// Evaluates a raw video stream URL, checks encoding tags in `efg=`, and assigns a quality score.
+    private func scoreAndCategorize(rawURL: String) -> ScoredVideoCandidate? {
+        guard let url = URL(string: rawURL), url.scheme == "https" else { return nil }
+        
+        var score = 100
+        var label = "720p HD"
+        
+        // Inspect efg parameter (base64 JSON containing vencode_tag and bitrate)
+        if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           let efgParam = components.queryItems?.first(where: { $0.name == "efg" })?.value {
+            var rawB64 = efgParam
+                .replacingOccurrences(of: "%3D", with: "=")
+                .replacingOccurrences(of: "%2F", with: "/")
+                .replacingOccurrences(of: "%2B", with: "+")
+            let pad = rawB64.count % 4
+            if pad > 0 {
+                rawB64.append(String(repeating: "=", count: 4 - pad))
+            }
+            
+            if let data = Data(base64Encoded: rawB64),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let tag = (json["vencode_tag"] as? String)?.lowercased() ?? ""
+                
+                // Exclude pure audio streams
+                if tag.contains("audio") || tag.contains("heaac") {
+                    return nil
+                }
+                
+                if tag.contains("1080") {
+                    score += 10000
+                    label = "1080p Full HD"
+                } else if tag.contains("720") {
+                    score += 5000
+                    label = "720p HD"
+                } else if tag.contains("480") {
+                    score += 2000
+                    label = "480p SD"
+                } else if tag.contains("360") {
+                    score += 500
+                    label = "360p SD"
+                }
+                
+                if let bitrate = json["bitrate"] as? Int {
+                    score += bitrate / 1000
+                }
+                if tag.contains("dash_high") {
+                    score += 2500
+                }
+            }
+        }
+        
+        if rawURL.contains("1080") && !label.contains("1080") {
+            score += 8000
+            label = "1080p Full HD"
+        } else if rawURL.contains("720") && !label.contains("720") {
+            score += 4000
+        }
+        
+        return ScoredVideoCandidate(url: url, score: score, qualityLabel: label, contentLength: nil)
     }
     
     private func extractMetaProperty(html: String, property: String) -> String? {

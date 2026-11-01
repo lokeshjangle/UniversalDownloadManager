@@ -100,13 +100,23 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
                     continue
                 }
                 
-                // If resume data was saved before termination, mark as paused/interrupted
+                // If resume data was saved before termination, resume if autoRetry is enabled
                 if storage.readResumeData(for: item.id) != nil {
+                    if autoRetry {
+                        coordinator.resumeDownload(item: item, allItems: items)
+                        continue
+                    }
                     item.status = .interrupted
                     item.hasResumeData = true
                     item.lastError = "Network or app interrupted. Tap Retry to resume."
                     item.currentSpeed = nil
                     item.estimatedTimeRemaining = nil
+                    continue
+                }
+                
+                // If autoRetry is on, automatically resume the download rather than leaving it stalled
+                if autoRetry, item.originalURL != nil {
+                    coordinator.resumeDownload(item: item, allItems: items)
                     continue
                 }
                 

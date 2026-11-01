@@ -1,5 +1,7 @@
 import Foundation
 import Combine
+import UIKit
+import UserNotifications
 
 /// Protocol for listening to real-time download lifecycle events.
 @MainActor
@@ -51,6 +53,12 @@ final class BackgroundDownloadService: NSObject, @unchecked Sendable {
     /// Speed calculation trackers: download UUID -> (lastBytes: Int64, lastTime: Date, smoothedSpeed: Double).
     private var speedTrackers: [UUID: (lastBytes: Int64, lastTime: Date, smoothedSpeed: Double)] = [:]
     
+    /// Timestamp of the last progress delegate dispatch per download (throttled for maximum throughput).
+    private var lastProgressReportTimes: [UUID: Date] = [:]
+    
+    /// Background task identifier to maintain execution grace period during app minimization.
+    private var backgroundTaskIdentifier: UIBackgroundTaskIdentifier = .invalid
+    
     private override init() {
         super.init()
         setupSession()
@@ -62,15 +70,42 @@ final class BackgroundDownloadService: NSObject, @unchecked Sendable {
         let configuration = URLSessionConfiguration.background(withIdentifier: Self.backgroundSessionIdentifier)
         configuration.isDiscretionary = false
         configuration.sessionSendsLaunchEvents = true
-        configuration.timeoutIntervalForRequest = 60
-        configuration.timeoutIntervalForResource = 60 * 60 * 24 // 24 hours for large downloads
-        configuration.httpMaximumConnectionsPerHost = 4
+        configuration.waitsForConnectivity = true
+        configuration.timeoutIntervalForRequest = 300 // 5 minutes to prevent premature timeouts during device sleep
+        configuration.timeoutIntervalForResource = 60 * 60 * 48 // 48 hours for multi-GB transfers
+        configuration.httpMaximumConnectionsPerHost = 6
+        configuration.allowsCellularAccess = true
+        configuration.allowsExpensiveNetworkAccess = true
+        configuration.allowsConstrainedNetworkAccess = true
         
         let delegateQueue = OperationQueue()
         delegateQueue.name = "com.lokeshjangale.UniversalDownloadManager.sessionQueue"
-        delegateQueue.maxConcurrentOperationCount = 2
+        delegateQueue.maxConcurrentOperationCount = 8
+        delegateQueue.qualityOfService = .userInitiated
         
         self.session = URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
+    }
+    
+    // MARK: - Background Grace Period Management
+    
+    /// Requests a temporary background execution extension from iOS so active transfers
+    /// transition smoothly to the system daemon without abrupt socket termination.
+    func beginBackgroundGracePeriodIfNeeded() {
+        Task { @MainActor [weak self] in
+            guard let self = self, self.backgroundTaskIdentifier == .invalid else { return }
+            self.backgroundTaskIdentifier = UIApplication.shared.beginBackgroundTask(withName: "UDM_ActiveDownloadGracePeriod") { [weak self] in
+                self?.endBackgroundGracePeriod()
+            }
+        }
+    }
+    
+    func endBackgroundGracePeriod() {
+        Task { @MainActor in
+            guard self.backgroundTaskIdentifier != .invalid else { return }
+            let currentID = self.backgroundTaskIdentifier
+            self.backgroundTaskIdentifier = .invalid
+            UIApplication.shared.endBackgroundTask(currentID)
+        }
     }
     
     // MARK: - Task Control
@@ -84,19 +119,27 @@ final class BackgroundDownloadService: NSObject, @unchecked Sendable {
         if let resumeData = FileStorageService.shared.readResumeData(for: id) {
             let task = session.downloadTask(withResumeData: resumeData)
             task.taskDescription = id.uuidString // Persisted by nsurlsessiond across restarts
+            task.priority = URLSessionTask.highPriority // 1.0 (Maximum system priority for nsurlsessiond)
             register(task: task, for: id, filename: filename)
             task.resume()
+            beginBackgroundGracePeriodIfNeeded()
             return
         }
         
-        // Otherwise start a fresh download task
+        // Otherwise start a fresh high-speed download task
         var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData // Eliminate URLCache disk bottlenecks
+        request.networkServiceType = .responsiveData // High network priority in iOS stack
         request.setValue("UniversalDownloadManager/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("*/*", forHTTPHeaderField: "Accept")
+        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         
         let task = session.downloadTask(with: request)
         task.taskDescription = id.uuidString // Persisted by nsurlsessiond across restarts
+        task.priority = URLSessionTask.highPriority // 1.0 (Maximum system priority for nsurlsessiond)
         register(task: task, for: id, filename: filename)
         task.resume()
+        beginBackgroundGracePeriodIfNeeded()
     }
     
     private func register(task: URLSessionDownloadTask, for id: UUID, filename: String) {
@@ -104,6 +147,7 @@ final class BackgroundDownloadService: NSObject, @unchecked Sendable {
         taskIdentifierToID[task.taskIdentifier] = id
         taskFilenames[id] = filename
         speedTrackers[id] = (lastBytes: 0, lastTime: Date(), smoothedSpeed: 0)
+        lastProgressReportTimes[id] = .distantPast
     }
     
     /// Pauses an active download, attempting to produce and persist resume data.
@@ -146,7 +190,13 @@ final class BackgroundDownloadService: NSObject, @unchecked Sendable {
             taskIdentifierToID.removeValue(forKey: task.taskIdentifier)
         }
         speedTrackers.removeValue(forKey: id)
+        lastProgressReportTimes.removeValue(forKey: id)
+        let noActive = activeTasks.isEmpty
         lock.unlock()
+        
+        if noActive {
+            endBackgroundGracePeriod()
+        }
         
         FileStorageService.shared.removeResumeData(for: id)
         task?.cancel()
@@ -172,7 +222,17 @@ final class BackgroundDownloadService: NSObject, @unchecked Sendable {
                         runningIDs.insert(id)
                         
                         taskFilenames[id] = filename
-                        speedTrackers[id] = (lastBytes: 0, lastTime: Date(), smoothedSpeed: 0)
+                        if speedTrackers[id] == nil {
+                            speedTrackers[id] = (lastBytes: 0, lastTime: Date(), smoothedSpeed: 0)
+                        }
+                        if lastProgressReportTimes[id] == nil {
+                            lastProgressReportTimes[id] = .distantPast
+                        }
+                        
+                        // If task was paused or suspended by the system daemon, resume it immediately
+                        if downloadTask.state == .suspended {
+                            downloadTask.resume()
+                        }
                     } else {
                         // Stale task without corresponding download record in store: cancel safely
                         downloadTask.cancel()
@@ -182,6 +242,14 @@ final class BackgroundDownloadService: NSObject, @unchecked Sendable {
                     downloadTask.cancel()
                 }
             }
+            
+            // Also preserve any in-memory active tasks that are running
+            for (id, task) in activeTasks {
+                if task.state == .running || task.state == .suspended {
+                    runningIDs.insert(id)
+                }
+            }
+            
             return runningIDs
         }
     }
@@ -241,17 +309,31 @@ extension BackgroundDownloadService: URLSessionDownloadDelegate {
         } else {
             speedTrackers[id] = (lastBytes: totalBytesWritten, lastTime: now, smoothedSpeed: 0)
         }
+        
+        // High-Performance Progress Throttling:
+        // Only dispatch to MainActor at most 4 times per second (>= 0.25s) or upon 100% completion.
+        let lastReport = lastProgressReportTimes[id] ?? .distantPast
+        let timeSinceLastReport = now.timeIntervalSince(lastReport)
+        let isComplete = totalBytesExpectedToWrite > 0 && totalBytesWritten >= totalBytesExpectedToWrite
+        
+        guard timeSinceLastReport >= 0.25 || isComplete else {
+            lock.unlock()
+            return
+        }
+        lastProgressReportTimes[id] = now
         lock.unlock()
         
         let expectedTotal: Int64? = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : nil
+        let finalSpeed = speed
+        let finalEta = eta
         
         Task { @MainActor in
             self.delegate?.downloadDidUpdateProgress(
                 id: id,
                 bytesReceived: totalBytesWritten,
                 totalBytes: expectedTotal,
-                speed: speed,
-                eta: eta
+                speed: finalSpeed,
+                eta: finalEta
             )
         }
     }
@@ -313,7 +395,13 @@ extension BackgroundDownloadService: URLSessionDownloadDelegate {
         taskIdentifierToID.removeValue(forKey: downloadTask.taskIdentifier)
         taskFilenames.removeValue(forKey: id)
         speedTrackers.removeValue(forKey: id)
+        lastProgressReportTimes.removeValue(forKey: id)
+        let noActive = activeTasks.isEmpty
         lock.unlock()
+        
+        if noActive {
+            endBackgroundGracePeriod()
+        }
         
         FileStorageService.shared.removeResumeData(for: id)
         
@@ -327,6 +415,7 @@ extension BackgroundDownloadService: URLSessionDownloadDelegate {
         
         do {
             let result = try FileStorageService.shared.saveDownloadedFile(from: location, suggestedFilename: finalFilename)
+            postCompletionNotification(filename: result.actualFilename, fileSize: result.fileSize)
             Task { @MainActor in
                 self.delegate?.downloadDidComplete(id: id, localFilename: result.actualFilename, fileSize: result.fileSize)
             }
@@ -335,6 +424,21 @@ extension BackgroundDownloadService: URLSessionDownloadDelegate {
                 self.delegate?.downloadDidFail(id: id, error: "Failed to save file: \(error.localizedDescription)", canResume: false)
             }
         }
+    }
+    
+    private func postCompletionNotification(filename: String, fileSize: Int64) {
+        let content = UNMutableNotificationContent()
+        content.title = "Download Complete"
+        let sizeStr = ByteCountFormatter.string(fromByteCount: fileSize, countStyle: .file)
+        content.body = "\(filename) (\(sizeStr)) has been saved."
+        content.sound = .default
+        
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil // Deliver immediately
+        )
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
     }
     
     private func parseFilenameFromContentDisposition(_ header: String) -> String? {
@@ -391,7 +495,13 @@ extension BackgroundDownloadService: URLSessionTaskDelegate {
         taskIdentifierToID.removeValue(forKey: task.taskIdentifier)
         taskFilenames.removeValue(forKey: id)
         speedTrackers.removeValue(forKey: id)
+        lastProgressReportTimes.removeValue(forKey: id)
+        let noActive = activeTasks.isEmpty
         lock.unlock()
+        
+        if noActive {
+            endBackgroundGracePeriod()
+        }
         
         // Cancellation handling (e.g. paused by user)
         if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {

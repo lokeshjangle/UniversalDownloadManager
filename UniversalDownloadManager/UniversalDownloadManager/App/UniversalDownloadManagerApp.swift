@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 @main
 struct UniversalDownloadManagerApp: App {
@@ -11,6 +12,10 @@ struct UniversalDownloadManagerApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(store: store)
+                .onAppear {
+                    // Request notification permission for background completion alerts
+                    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { _, _ in }
+                }
                 .onOpenURL { incomingURL in
                     _ = store.handleIncomingURL(incomingURL)
                 }
@@ -22,8 +27,9 @@ struct UniversalDownloadManagerApp: App {
                 .onChange(of: scenePhase) { _, newPhase in
                     switch newPhase {
                     case .background:
-                        // App was minimized or suspended — flush all download metadata to disk
+                        // App was minimized or suspended — flush all download metadata to disk and begin background grace period
                         store.flushToDisk()
+                        BackgroundDownloadService.shared.beginBackgroundGracePeriodIfNeeded()
                     case .active:
                         // App returned to foreground — import any pending shared downloads and reconcile running background transfers
                         store.checkAndImportPendingRequests()

@@ -102,19 +102,47 @@ struct AddDownloadView: View {
                         }
                         
                         if detectedPlatform != .direct {
-                            HStack(spacing: 10) {
-                                Image(systemName: detectedPlatform.iconName)
-                                    .font(.title3)
-                                    .foregroundStyle(detectedPlatform == .instagram ? .purple : .red)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("\(detectedPlatform.rawValue) Detected")
-                                        .font(.subheadline.bold())
-                                    Text(detectedPlatform == .instagram ? "Client-side video stream extraction" : "Stream extraction via resolver API")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(spacing: 10) {
+                                    Image(systemName: detectedPlatform.iconName)
+                                        .font(.title3)
+                                        .foregroundStyle(detectedPlatform == .instagram ? .purple : .red)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("\(detectedPlatform.rawValue) Detected")
+                                            .font(.subheadline.bold())
+                                        Text(detectedPlatform == .instagram ? "Best available stream extraction" : "Stream extraction via resolver API")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    GlassBadge("Stream", color: detectedPlatform == .instagram ? .purple : .red)
                                 }
-                                Spacer()
-                                GlassBadge("Stream", color: detectedPlatform == .instagram ? .purple : .red)
+                                
+                                if detectedPlatform == .instagram, let targetURL = coordinator.validateURL(urlText) {
+                                    Divider()
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "sparkles")
+                                                .foregroundStyle(.purple)
+                                            Text("Quality Optimizer Active")
+                                                .font(.caption.bold())
+                                                .foregroundStyle(.primary)
+                                        }
+                                        Text("Evaluates multiple stream resolutions and selects the highest bitrate MP4 available.")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                        
+                                        Link(destination: targetURL) {
+                                            HStack(spacing: 4) {
+                                                Image(systemName: "safari")
+                                                Text("Open in Safari for Original 1080p (Logged-In)")
+                                            }
+                                            .font(.caption2.bold())
+                                            .foregroundStyle(.purple)
+                                        }
+                                        .padding(.top, 2)
+                                    }
+                                }
                             }
                             .padding(10)
                             .glassEffect(.regular, in: .rect(cornerRadius: 12))
