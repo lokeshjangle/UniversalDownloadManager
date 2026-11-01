@@ -7,9 +7,9 @@
 build/
 DerivedData/
 *.xcuserstate
+*.xcuserdata
 project.xcworkspace/xcuserdata/
 xcuserdata/
 
 # Scratch & Tests
 scratch/
-UniversalDownloadManager/scratch/

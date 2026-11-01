@@ -95,7 +95,7 @@ UniversalDownloadManager/
 ### 1. Build Verification via Command Line
 Run a clean build for the iOS Simulator:
 ```bash
-xcodebuild -project UniversalDownloadManager/UniversalDownloadManager.xcodeproj \
+xcodebuild -project UniversalDownloadManager.xcodeproj \
   -scheme UniversalDownloadManager \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
   build CODE_SIGNING_ALLOWED=NO
