@@ -218,10 +218,26 @@ final class FileStorageService: @unchecked Sendable {
         if clean.isEmpty {
             clean = "download"
         }
+        
+        // Strip path separators, null bytes, and control characters
         clean = clean.replacingOccurrences(of: "/", with: "_")
         clean = clean.replacingOccurrences(of: ":", with: "_")
         clean = clean.replacingOccurrences(of: "\\", with: "_")
         clean = clean.replacingOccurrences(of: "\0", with: "")
+        
+        // Prevent path traversal sequences (e.g. "../", "..")
+        while clean.contains("..") {
+            clean = clean.replacingOccurrences(of: "..", with: "_")
+        }
+        
+        // Prevent hidden dotfiles (.bashrc, .env, .config)
+        while clean.hasPrefix(".") {
+            clean = String(clean.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        
+        if clean.isEmpty || clean == "." || clean == ".." {
+            clean = "download"
+        }
         
         if clean.count > 180 {
             let ext = (clean as NSString).pathExtension

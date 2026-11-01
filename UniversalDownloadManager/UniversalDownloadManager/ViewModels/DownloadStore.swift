@@ -217,6 +217,12 @@ final class DownloadStore: ObservableObject, DownloadServiceDelegate {
             return false
         }
         
+        // Security check: Block automated private/local intranet network probing via deep links
+        if coordinator.isPrivateOrLocalAddress(url: targetURL) {
+            notificationMessage = "Security Notice: Downloads targeting local network addresses cannot be auto-queued via external links."
+            return false
+        }
+        
         let nameItem = components.queryItems?.first(where: { $0.name.lowercased() == "name" || $0.name.lowercased() == "filename" })
         let customName = nameItem?.value
         

@@ -32,6 +32,24 @@ final class DownloadCoordinator: ObservableObject {
         return url
     }
     
+    /// Determines whether a URL points to local/private network addresses (localhost, 127.0.0.1, 192.168.x.x, etc.)
+    func isPrivateOrLocalAddress(url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return true }
+        if host == "localhost" || host.hasSuffix(".local") || host == "127.0.0.1" || host == "::1" {
+            return true
+        }
+        if host.hasPrefix("192.168.") || host.hasPrefix("10.") || host.hasPrefix("169.254.") {
+            return true
+        }
+        if host.hasPrefix("172.") {
+            let parts = host.split(separator: ".")
+            if parts.count >= 2, let second = Int(parts[1]), second >= 16 && second <= 31 {
+                return true
+            }
+        }
+        return false
+    }
+    
     /// Derives a clean filename from a URL.
     /// - Parameter url: The URL to derive a filename from.
     /// - Returns: A suggested filename string.
