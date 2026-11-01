@@ -37,3 +37,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Byte-range resume data persistence preventing corrupted file states on network interruptions.
 - Automated file collision protection (`filename (1).ext`) when duplicate filenames are queued.
 - Eliminated all hardcoded demo mock files and added automated startup cleanup for legacy test files.
+
