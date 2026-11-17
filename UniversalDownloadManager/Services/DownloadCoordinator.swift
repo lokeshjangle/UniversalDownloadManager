@@ -72,11 +72,12 @@ final class DownloadCoordinator: ObservableObject {
         guard availableSlots > 0 else { return }
         
         let queuedItems = items.filter { $0.status == .queued }
+        let cookies = InstagramSessionManager.shared.cookieHeader
         for item in queuedItems.prefix(availableSlots) {
             guard let url = item.originalURL else { continue }
             item.status = .downloading
             item.startedAt = Date()
-            downloadService.startDownload(id: item.id, url: url, filename: item.displayFilename)
+            downloadService.startDownload(id: item.id, url: url, filename: item.displayFilename, cookieHeader: cookies)
         }
     }
     
@@ -88,7 +89,8 @@ final class DownloadCoordinator: ObservableObject {
             guard let url = item.originalURL else { return }
             item.status = .downloading
             item.startedAt = Date()
-            downloadService.startDownload(id: item.id, url: url, filename: item.displayFilename)
+            let cookies = InstagramSessionManager.shared.cookieHeader
+            downloadService.startDownload(id: item.id, url: url, filename: item.displayFilename, cookieHeader: cookies)
         } else {
             item.status = .queued
         }
@@ -106,7 +108,8 @@ final class DownloadCoordinator: ObservableObject {
         if currentlyDownloading < maxConcurrentDownloads {
             guard let url = item.originalURL else { return }
             item.status = .downloading
-            downloadService.startDownload(id: item.id, url: url, filename: item.displayFilename)
+            let cookies = InstagramSessionManager.shared.cookieHeader
+            downloadService.startDownload(id: item.id, url: url, filename: item.displayFilename, cookieHeader: cookies)
         } else {
             item.status = .queued
         }

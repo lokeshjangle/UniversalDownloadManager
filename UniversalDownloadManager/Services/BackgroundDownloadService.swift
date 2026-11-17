@@ -111,7 +111,7 @@ final class BackgroundDownloadService: NSObject, @unchecked Sendable {
     // MARK: - Task Control
     
     /// Starts or resumes a download task for a given download item.
-    func startDownload(id: UUID, url: URL, filename: String) {
+    func startDownload(id: UUID, url: URL, filename: String, cookieHeader: String? = nil) {
         lock.lock()
         defer { lock.unlock() }
         
@@ -130,9 +130,18 @@ final class BackgroundDownloadService: NSObject, @unchecked Sendable {
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData // Eliminate URLCache disk bottlenecks
         request.networkServiceType = .responsiveData // High network priority in iOS stack
-        request.setValue("UniversalDownloadManager/1.0", forHTTPHeaderField: "User-Agent")
+        // Use standard modern Mobile Safari User-Agent to avoid bot blocking and PHP login redirects
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
         request.setValue("*/*", forHTTPHeaderField: "Accept")
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        
+        // Attach session cookies and Referer if targeting Instagram hosts
+        if let host = url.host?.lowercased(), (host.contains("instagram.com") || host.contains("cdninstagram.com") || host.contains("fbcdn.net")) {
+            request.setValue("https://www.instagram.com/", forHTTPHeaderField: "Referer")
+            if let cookieHeader, !cookieHeader.isEmpty {
+                request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+            }
+        }
         
         let task = session.downloadTask(with: request)
         task.taskDescription = id.uuidString // Persisted by nsurlsessiond across restarts

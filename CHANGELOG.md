@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Privacy & Permissions (TCC):** Configured user-facing usage descriptions for `NSPhotoLibraryAddUsageDescription` and `NSPhotoLibraryUsageDescription`.
 
 ### Fixed
+- Fixed Instagram Story downloading redirecting to `login.php` by injecting authenticated cookies, Referer, and Safari User-Agent into background download tasks.
+- Fixed `PHPhotosErrorDomain` exception by adding content header verification before attempting to import files into Apple Photos.
+- Enhanced In-App Browser sniffer to intercept live fetch/XHR network streams for both video and photo stories.
 - Byte-range resume data persistence preventing corrupted file states on network interruptions.
 - Automated file collision protection (`filename (1).ext`) when duplicate filenames are queued.
 - Eliminated all hardcoded demo mock files and added automated startup cleanup for legacy test files.

@@ -7,6 +7,7 @@ struct DetectedMediaItem: Identifiable, Equatable {
     let mediaURL: URL
     let pageURL: URL?
     let title: String?
+    let mediaType: String // "video" or "image"
     let detectedAt: Date = Date()
 }
 
@@ -225,21 +226,22 @@ struct InAppBrowserView: View {
     
     @ViewBuilder
     private func detectedMediaBanner(for media: DetectedMediaItem) -> some View {
+        let isVideo = media.mediaType == "video"
         GlassCard(cornerRadius: 18, padding: 14) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
-                    Image(systemName: "film.fill")
+                    Image(systemName: isVideo ? "film.fill" : "photo.fill")
                         .font(.title3)
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(isVideo ? .purple : .blue)
                         .frame(width: 36, height: 36)
-                        .background(Color.purple.opacity(0.15), in: .circle)
+                        .background((isVideo ? Color.purple : Color.blue).opacity(0.15), in: .circle)
                     
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Video Stream Detected")
+                        Text(isVideo ? "Video Stream Detected" : "Photo Stream Detected")
                             .font(.subheadline.bold())
                             .foregroundStyle(.primary)
                         
-                        Text(media.title ?? "Instagram Story / Video")
+                        Text(media.title ?? (isVideo ? "Instagram Story / Video" : "Instagram Story Photo"))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -262,7 +264,7 @@ struct InAppBrowserView: View {
                 } label: {
                     HStack {
                         Image(systemName: "arrow.down.circle.fill")
-                        Text("Download Video (Saves to Photos)")
+                        Text(isVideo ? "Download Video (Saves to Photos)" : "Download Photo (Saves to Photos)")
                             .fontWeight(.semibold)
                     }
                     .font(.subheadline)
@@ -271,7 +273,7 @@ struct InAppBrowserView: View {
                     .padding(.vertical, 10)
                     .background(
                         LinearGradient(
-                            colors: [.purple, .blue],
+                            colors: isVideo ? [.purple, .blue] : [.blue, .cyan],
                             startPoint: .leading,
                             endPoint: .trailing
                         ),
@@ -321,6 +323,9 @@ struct InAppBrowserView: View {
     private func downloadDetectedMedia(_ media: DetectedMediaItem) {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         
+        let isImage = media.mediaType == "image" || media.mediaURL.pathExtension.lowercased() == "jpg"
+        let ext = isImage ? "jpg" : "mp4"
+        
         // Generate clean sanitized filename
         let filename: String
         let timestamp = Int(Date().timeIntervalSince1970)
@@ -329,9 +334,9 @@ struct InAppBrowserView: View {
             let rawUser = components.count > 4 ? String(components[4]) : "story"
             let safeUser = rawUser.filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "." }
             let finalUser = safeUser.isEmpty ? "story" : safeUser
-            filename = "Instagram_Story_\(finalUser)_\(timestamp).mp4"
+            filename = "Instagram_Story_\(finalUser)_\(timestamp).\(ext)"
         } else {
-            filename = "Instagram_Video_\(timestamp).mp4"
+            filename = isImage ? "Instagram_Photo_\(timestamp).jpg" : "Instagram_Video_\(timestamp).mp4"
         }
         
         store.addDownload(url: media.mediaURL, customFilename: filename)
@@ -381,42 +386,80 @@ private struct WebViewContainer: UIViewRepresentable {
         // Inject Media Sniffer JavaScript
         let snifferScript = """
         (function() {
-            function notifyMedia(url, title) {
+            function notifyMedia(url, title, type) {
                 if (!url || typeof url !== 'string') return;
-                // Exclude data URLs or tiny blob placeholders
-                if (url.startsWith('data:') || (url.startsWith('blob:') && url.length < 15)) return;
+                if (url.startsWith('data:') || url.startsWith('blob:')) return;
                 
-                // Only notify for mp4 or common media stream URLs
-                if (url.includes('.mp4') || url.includes('cdninstagram.com') || url.includes('/video/') || url.includes('bytedance')) {
+                // Exclude analytics, telemetry, or login beacons
+                if (url.includes('/logging/') || url.includes('/ajax/') || url.includes('/metrics/') || url.includes('/login')) return;
+                
+                var isVideo = url.includes('.mp4') || url.includes('/video/') || url.includes('bytedance') || (url.includes('cdninstagram.com') && (url.includes('&efg=') || url.includes('bytestart=')));
+                var isImage = url.includes('cdninstagram.com') && (url.includes('.jpg') || url.includes('.jpeg') || url.includes('.webp') || url.includes('/v/t51.') || url.includes('_n.jpg'));
+                
+                // Exclude small avatars and icon thumbnails
+                if (isImage && (url.includes('-19/') || url.includes('/s150x150/') || url.includes('/s320x320/'))) return;
+                
+                if (isVideo || isImage) {
                     try {
                         window.webkit.messageHandlers.mediaSniffer.postMessage({
                             url: url,
                             title: title || document.title,
-                            page: window.location.href
+                            page: window.location.href,
+                            mediaType: isVideo ? "video" : "image"
                         });
                     } catch(e) {}
                 }
             }
 
-            // Hook <video> play and loadeddata events
+            // 1. Hook network requests (Fetch & XHR)
+            var originalFetch = window.fetch;
+            window.fetch = function() {
+                var args = arguments;
+                var reqUrl = (typeof args[0] === 'string') ? args[0] : (args[0] && args[0].url);
+                if (reqUrl) {
+                    notifyMedia(reqUrl, document.title, "fetch");
+                }
+                return originalFetch.apply(this, args);
+            };
+
+            var originalOpen = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function(method, url) {
+                if (url && typeof url === 'string') {
+                    notifyMedia(url, document.title, "xhr");
+                }
+                return originalOpen.apply(this, arguments);
+            };
+
+            // 2. Hook Video Play Events
             document.addEventListener('play', function(e) {
                 if (e.target && e.target.tagName === 'VIDEO') {
                     var src = e.target.currentSrc || e.target.src;
-                    notifyMedia(src, document.title);
+                    notifyMedia(src, document.title, "video");
                 }
             }, true);
 
-            // Periodic inspection for active playing video elements
+            // 3. Periodic DOM inspection for active playing video elements and story images
             setInterval(function() {
                 var videos = document.getElementsByTagName('video');
                 for (var i = 0; i < videos.length; i++) {
                     var v = videos[i];
                     var src = v.currentSrc || v.src;
-                    if (src && (!v.paused || videos.length === 1)) {
-                        notifyMedia(src, document.title);
+                    if (src && !src.startsWith('blob:')) {
+                        notifyMedia(src, document.title, "video");
                     }
                 }
-            }, 1200);
+                
+                if (window.location.href.includes('/stories/')) {
+                    var images = document.getElementsByTagName('img');
+                    for (var j = 0; j < images.length; j++) {
+                        var img = images[j];
+                        var imgSrc = img.currentSrc || img.src;
+                        if (imgSrc && imgSrc.includes('cdninstagram.com') && (img.clientWidth > 200 || img.clientHeight > 200)) {
+                            notifyMedia(imgSrc, document.title, "image");
+                        }
+                    }
+                }
+            }, 1000);
         })();
         """
         
@@ -517,11 +560,13 @@ private struct WebViewContainer: UIViewRepresentable {
             
             let title = body["title"] as? String
             let pageURL = (body["page"] as? String).flatMap { URL(string: $0) }
+            let mediaType = body["mediaType"] as? String ?? "video"
             
             let item = DetectedMediaItem(
                 mediaURL: mediaURL,
                 pageURL: pageURL,
-                title: title
+                title: title,
+                mediaType: mediaType
             )
             
             DispatchQueue.main.async {

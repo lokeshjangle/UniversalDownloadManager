@@ -293,6 +293,10 @@ struct AddDownloadView: View {
                 } catch {
                     isResolvingMedia = false
                     validationError = error.localizedDescription
+                    if url.path.lowercased().contains("/stories/") {
+                        browserTargetURL = url
+                        showingBrowser = true
+                    }
                 }
             }
         }

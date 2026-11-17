@@ -73,6 +73,24 @@ final class PhotoLibraryService: Sendable {
             )
         }
         
+        // Content validation: Verify that the file is genuine media and not an HTML/PHP login/error page
+        if let fileHandle = try? FileHandle(forReadingFrom: fileURL) {
+            defer { try? fileHandle.close() }
+            let prefixData = fileHandle.readData(ofLength: 512)
+            if let prefixString = String(data: prefixData, encoding: .utf8) {
+                let lower = prefixString.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                if lower.hasPrefix("<!doctype") || lower.hasPrefix("<html") || lower.hasPrefix("<?php") ||
+                   lower.hasPrefix("<!entity") || lower.contains("<head>") || lower.contains("<body>") ||
+                   lower.contains("login") && lower.contains("<form") {
+                    throw NSError(
+                        domain: "PhotoLibraryError",
+                        code: 422,
+                        userInfo: [NSLocalizedDescriptionKey: "The downloaded file is an Instagram login/error web page instead of a playable media stream. Please ensure you are logged into Instagram in the In-App Browser to download stories."]
+                    )
+                }
+            }
+        }
+        
         let isVideo = isVideoFile(filename: filename)
         
         try await PHPhotoLibrary.shared().performChanges {
